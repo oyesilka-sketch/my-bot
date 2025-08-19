@@ -26,7 +26,7 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['UPLOAD_FOLDER'] = 'static/images'
 
 # Ngrok yapılandırması
-NGROK_AUTH_TOKEN = '31VLc3RYqaikIfktxsWr9fwU9jD_66ZiQCgTiyXaQWXFKSDbc' 
+NGROK_AUTH_TOKEN = '31VLc3RYqaikIfktxsWr9fwU9jD_66ZiQCgTiyXaQWXFKSDbc'
 NGROK_TUNNEL = None
 
 # İzin verilen dosya türleri
@@ -593,6 +593,8 @@ def api_haberi_yayinla():
         print(f"DEBUG API: Başlık: {baslik}")
         print(f"DEBUG API: Resim dosyası: {resim_dosyasi}")
         print(f"DEBUG API: IMAGE_FOLDER: {yonetici.IMAGE_FOLDER}")
+        print(f"DEBUG API: Current working directory: {os.getcwd()}")
+        print(f"DEBUG API: Environment: {os.environ.get('RENDER', 'LOCAL')}")
         
         if not baslik or not icerik:
             return jsonify({'success': False, 'error': 'Başlık ve içerik gerekli'})
@@ -601,19 +603,67 @@ def api_haberi_yayinla():
         if not resim_dosyasi:
             return jsonify({'success': False, 'error': 'Kapak fotoğrafı seçmek zorunludur!'})
         
+        # Render.com kontrol
+        if os.environ.get('RENDER'):
+            print(f"DEBUG API: RENDER ortamında çalışıyor")
+            # Render'da dosya sistemi ephemeral - kontrol et
+            print(f"DEBUG API: Disk kullanımı kontrol ediliyor...")
+            import shutil
+            total, used, free = shutil.disk_usage('.')
+            print(f"DEBUG API: Free space: {free / (1024**2):.2f} MB")
+        
         # Resim yolunu belirle - BU KISIM ÖNEMLİ
         resim_yolu = os.path.join(yonetici.IMAGE_FOLDER, resim_dosyasi)
         print(f"DEBUG API: Oluşturulan resim yolu: {resim_yolu}")
         print(f"DEBUG API: Mutlak yol: {os.path.abspath(resim_yolu)}")
         
+        # Klasör varlığını kontrol et
+        if not os.path.exists(yonetici.IMAGE_FOLDER):
+            print(f"DEBUG API: IMAGE_FOLDER mevcut değil, oluşturuluyor: {yonetici.IMAGE_FOLDER}")
+            os.makedirs(yonetici.IMAGE_FOLDER, exist_ok=True)
+        
+        # Klasör içeriğini listele
+        if os.path.exists(yonetici.IMAGE_FOLDER):
+            folder_contents = os.listdir(yonetici.IMAGE_FOLDER)
+            print(f"DEBUG API: IMAGE_FOLDER içeriği: {folder_contents}")
+            print(f"DEBUG API: Klasör içinde {len(folder_contents)} dosya var")
+            
+            # Dosya adı eşleşmesi kontrol et
+            matching_files = [f for f in folder_contents if resim_dosyasi in f or f in resim_dosyasi]
+            print(f"DEBUG API: Eşleşen dosyalar: {matching_files}")
+        
         if not os.path.exists(resim_yolu):
             print(f"DEBUG API: Resim dosyası bulunamadı!")
             print(f"DEBUG API: Aranan yol: {resim_yolu}")
-            if os.path.exists(yonetici.IMAGE_FOLDER):
-                print(f"DEBUG API: IMAGE_FOLDER içeriği: {os.listdir(yonetici.IMAGE_FOLDER)}")
-            else:
-                print(f"DEBUG API: IMAGE_FOLDER mevcut değil: {yonetici.IMAGE_FOLDER}")
-            return jsonify({'success': False, 'error': f'Seçilen fotoğraf bulunamadı! Aranan: {resim_yolu}'})
+            
+            # Render.com özel kontrolü
+            if os.environ.get('RENDER'):
+                print(f"DEBUG API: RENDER.COM UYARISI - Ephemeral file system!")
+                print(f"DEBUG API: Dosyalar sunucu restart'ında silinir!")
+                
+                # Alternatif çözüm: Dosya adını bulma
+                if os.path.exists(yonetici.IMAGE_FOLDER):
+                    all_files = os.listdir(yonetici.IMAGE_FOLDER)
+                    # Timestamp kısmını çıkararak eşleşme ara
+                    base_name = resim_dosyasi.split('_', 2)[-1] if '_' in resim_dosyasi else resim_dosyasi
+                    for file in all_files:
+                        if base_name in file or file.endswith(base_name):
+                            alternative_path = os.path.join(yonetici.IMAGE_FOLDER, file)
+                            print(f"DEBUG API: Alternatif dosya bulundu: {file}")
+                            resim_yolu = alternative_path
+                            break
+            
+            if not os.path.exists(resim_yolu):
+                return jsonify({
+                    'success': False, 
+                    'error': f'Fotoğraf bulunamadı! Render.com ephemeral storage sorunu olabilir. Dosyayı yeniden yükleyin.',
+                    'debug_info': {
+                        'aranan_dosya': resim_dosyasi,
+                        'aranan_yol': resim_yolu,
+                        'mevcut_dosyalar': folder_contents if 'folder_contents' in locals() else [],
+                        'render_ortami': bool(os.environ.get('RENDER'))
+                    }
+                })
         
         print(f"DEBUG API: Resim dosyası bulundu, boyut: {os.path.getsize(resim_yolu)} bytes")
         
@@ -625,6 +675,8 @@ def api_haberi_yayinla():
         
     except Exception as e:
         print(f"DEBUG API: Exception: {str(e)}")
+        import traceback
+        print(f"DEBUG API: Traceback: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/static/images/<filename>')
@@ -634,9 +686,10 @@ def uploaded_file(filename):
 
 @app.route('/api/fotograf-yukle', methods=['POST'])
 def api_fotograf_yukle():
-    """API: Fotoğraf yükle"""
+    """API: Fotoğraf yükle - Render.com uyumlu"""
     try:
         print(f"DEBUG UPLOAD: Fotoğraf yükleme başlıyor...")
+        print(f"DEBUG UPLOAD: Render ortamı: {bool(os.environ.get('RENDER'))}")
         
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': 'Dosya seçilmedi'})
@@ -647,44 +700,84 @@ def api_fotograf_yukle():
             return jsonify({'success': False, 'error': 'Dosya seçilmedi'})
         
         print(f"DEBUG UPLOAD: Gelen dosya: {file.filename}")
+        print(f"DEBUG UPLOAD: Dosya boyutu: {len(file.read())} bytes")
+        file.seek(0)  # Dosya pointer'ını başa al
         
         if file and allowed_file(file.filename):
-            # Güvenli dosya adı oluştur
-            filename = secure_filename(file.filename)
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
-            filename = timestamp + filename
+            # Render.com için özel dosya adı stratejisi
+            original_filename = secure_filename(file.filename)
+            
+            if os.environ.get('RENDER'):
+                # Render.com'da çok kısa ve basit dosya adı kullan
+                timestamp = datetime.now().strftime('%H%M%S')  # Sadece saat-dakika-saniye
+                random_suffix = str(random.randint(100, 999))
+                extension = os.path.splitext(original_filename)[1].lower()
+                filename = f"img_{timestamp}_{random_suffix}{extension}"
+            else:
+                # Local'de normal timestamp
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
+                filename = timestamp + original_filename
             
             print(f"DEBUG UPLOAD: Yeni dosya adı: {filename}")
             print(f"DEBUG UPLOAD: Upload folder: {app.config['UPLOAD_FOLDER']}")
             
-            # Klasör oluştur
-            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+            # Klasörü kesinlikle oluştur
+            upload_folder = app.config['UPLOAD_FOLDER']
+            os.makedirs(upload_folder, exist_ok=True)
+            
+            # Render.com için disk kontrolü
+            if os.environ.get('RENDER'):
+                import shutil
+                total, used, free = shutil.disk_usage('.')
+                free_mb = free / (1024**2)
+                print(f"DEBUG UPLOAD: Render disk - Free: {free_mb:.2f} MB")
+                
+                if free_mb < 50:  # 50MB'dan az boş yer
+                    print(f"DEBUG UPLOAD: Düşük disk alanı, eski dosyalar temizleniyor...")
+                    yonetici.eski_resimleri_temizle(1)  # 1 saatten eski dosyaları sil
             
             # Dosyayı kaydet
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            filepath = os.path.join(upload_folder, filename)
             print(f"DEBUG UPLOAD: Dosya kaydedilecek yol: {filepath}")
-            print(f"DEBUG UPLOAD: Mutlak yol: {os.path.abspath(filepath)}")
             
-            file.save(filepath)
-            print(f"DEBUG UPLOAD: Dosya kaydedildi")
+            try:
+                file.save(filepath)
+                print(f"DEBUG UPLOAD: Dosya başarıyla kaydedildi")
+                
+                # Hemen dosya varlığını kontrol et
+                if not os.path.exists(filepath):
+                    raise Exception(f"Dosya kaydedildi ama hemen bulunamadı: {filepath}")
+                
+                file_size = os.path.getsize(filepath)
+                print(f"DEBUG UPLOAD: Kaydedilen dosya boyutu: {file_size} bytes")
+                
+            except Exception as save_error:
+                print(f"DEBUG UPLOAD: Dosya kaydetme hatası: {save_error}")
+                return jsonify({'success': False, 'error': f'Dosya kaydetme hatası: {save_error}'})
             
-            # Resmi optimize et
+            # Resmi optimize et - Render.com için hızlı
             try:
                 with Image.open(filepath) as img:
                     print(f"DEBUG UPLOAD: Orijinal boyut: {img.size}")
-                    print(f"DEBUG UPLOAD: Orijinal mode: {img.mode}")
                     
-                    # RGBA'yı RGB'ye çevir (JPEG için)
+                    # Render.com için agresif optimizasyon
+                    if os.environ.get('RENDER'):
+                        # Daha küçük boyut ve daha düşük kalite
+                        max_size = (800, 600)  # Daha küçük
+                        quality = 70  # Daha düşük kalite
+                    else:
+                        max_size = (1200, 800)
+                        quality = 85
+                    
+                    # Mode conversion
                     if img.mode in ('RGBA', 'LA', 'P'):
                         background = Image.new('RGB', img.size, (255, 255, 255))
                         if img.mode == 'P':
                             img = img.convert('RGBA')
                         background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
                         img = background
-                        print(f"DEBUG UPLOAD: Mode çevrildi: RGB")
                     
-                    # Boyutları kontrol et ve küçült
-                    max_size = (1200, 800)
+                    # Resize
                     if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
                         img.thumbnail(max_size, Image.Resampling.LANCZOS)
                         print(f"DEBUG UPLOAD: Boyut küçültüldü: {img.size}")
@@ -692,31 +785,47 @@ def api_fotograf_yukle():
                     # JPEG olarak kaydet
                     if not filename.lower().endswith('.jpg'):
                         filename = os.path.splitext(filename)[0] + '.jpg'
-                        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                        print(f"DEBUG UPLOAD: JPEG uzantısı eklendi: {filename}")
+                        filepath = os.path.join(upload_folder, filename)
                     
-                    img.save(filepath, 'JPEG', quality=85, optimize=True)
-                    print(f"DEBUG UPLOAD: Optimize edilip JPEG olarak kaydedildi")
+                    img.save(filepath, 'JPEG', quality=quality, optimize=True)
+                    print(f"DEBUG UPLOAD: JPEG olarak optimize edildi, kalite: {quality}")
                     
             except Exception as e:
                 print(f"DEBUG UPLOAD: Resim optimize hatası: {e}")
+                # Optimize başarısız olsa da devam et
             
-            # Final kontrol
+            # Final kontroller
             if os.path.exists(filepath):
                 final_size = os.path.getsize(filepath)
                 print(f"DEBUG UPLOAD: Final dosya boyutu: {final_size} bytes")
-                print(f"DEBUG UPLOAD: Final dosya yolu: {filepath}")
-            
-            return jsonify({
-                'success': True, 
-                'filename': filename,
-                'url': f'/static/images/{filename}'
-            })
+                
+                # Render.com için ek kontrol - dosyayı hemen test et
+                if os.environ.get('RENDER'):
+                    try:
+                        with open(filepath, 'rb') as test_file:
+                            test_data = test_file.read(100)  # İlk 100 byte'ı oku
+                            print(f"DEBUG UPLOAD: Dosya erişim testi başarılı: {len(test_data)} bytes okundu")
+                    except Exception as read_error:
+                        print(f"DEBUG UPLOAD: Dosya erişim testi başarısız: {read_error}")
+                        return jsonify({'success': False, 'error': f'Dosya erişim sorunu: {read_error}'})
+                
+                return jsonify({
+                    'success': True, 
+                    'filename': filename,
+                    'url': f'/static/images/{filename}',
+                    'render_mode': bool(os.environ.get('RENDER')),
+                    'file_size': final_size
+                })
+            else:
+                print(f"DEBUG UPLOAD: Final dosya bulunamadı: {filepath}")
+                return jsonify({'success': False, 'error': 'Dosya işleme sonrası bulunamadı'})
         
         return jsonify({'success': False, 'error': 'Geçersiz dosya türü'})
         
     except Exception as e:
         print(f"DEBUG UPLOAD: Exception: {str(e)}")
+        import traceback
+        print(f"DEBUG UPLOAD: Traceback: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/eski-resimleri-temizle', methods=['POST'])
@@ -810,8 +919,8 @@ if __name__ == '__main__':
         print(f"Sunucu hatası: {e}")
     finally:
         cleanup_ngrok()
-
-import os
+        
+        import os
 
 if _name_ == "_main_":
     os.makedirs('static/uploads', exist_ok=True)
