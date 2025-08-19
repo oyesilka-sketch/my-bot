@@ -1,0 +1,17 @@
+{
+  "wordpress": {
+    "username": "istanbulhaber34",
+    "password": "tXOw dEIU 9ne4 J5N8 jm1G Z6A3",
+    "url": "https://istanbulsondakika.net"
+  },
+  "google_ai": {
+    "api_key": "AIzaSyAerr4h3HUpgkFLljnACTFHePYgQr9u6kk"
+  },
+  "settings": {
+    "sondakika_url": "https://www.sondakika.com/istanbul/",
+    "image_folder": "image",
+    "check_interval": 3600,
+    "onceki_haberler_file": "onceki_haberler.json",
+    "onceki_guncel_haberler_file": "onceki_guncel_haberler.json"
+  }
+} 
