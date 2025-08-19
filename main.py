@@ -15,17 +15,89 @@ import threading
 from pathlib import Path
 from werkzeug.utils import secure_filename
 import uuid
+from pyngrok import ngrok, conf
+import atexit
+import signal
+import sys
 
 app = Flask(__name__)
 app.secret_key = 'haber_yonetim_secret_key_2024'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['UPLOAD_FOLDER'] = 'static/images'
 
+# Ngrok yapılandırması
+NGROK_AUTH_TOKEN = '31VLc3RYqaikIfktxsWr9fwU9jD_66ZiQCgTiyXaQWXFKSDbc' 
+NGROK_TUNNEL = None
+
 # İzin verilen dosya türleri
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def setup_ngrok():
+    """Ngrok kurulumu ve başlatma"""
+    global NGROK_TUNNEL, NGROK_AUTH_TOKEN
+    
+    try:
+        # Config'den ngrok token'ı al
+        if os.path.exists('config.json'):
+            with open('config.json', 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                NGROK_AUTH_TOKEN = config.get('ngrok', {}).get('auth_token')
+        
+        if NGROK_AUTH_TOKEN:
+            # Ngrok auth token'ı set et
+            conf.get_default().auth_token = NGROK_AUTH_TOKEN
+            print("Ngrok auth token set edildi.")
+        else:
+            print("Uyarı: Ngrok auth token bulunamadı. Free tier sınırlamaları geçerli olacak.")
+        
+        # Mevcut tunnel'ları kapat
+        ngrok.kill()
+        
+        # Yeni tunnel başlat
+        NGROK_TUNNEL = ngrok.connect(5000, bind_tls=True)
+        ngrok_url = NGROK_TUNNEL.public_url
+        
+        print("\n" + "="*60)
+        print("🌐 NGROK TUNNEL AKTİF")
+        print("="*60)
+        print(f"Local URL: http://localhost:5000")
+        print(f"Public URL: {ngrok_url}")
+        print(f"iPhone/Mobil URL: {ngrok_url}")
+        print("="*60)
+        print("📱 iPhone'dan bu URL'i Safari'de açın!")
+        print("⚠️  Güvenlik: Bu URL'i kimseyle paylaşmayın")
+        print("="*60 + "\n")
+        
+        return ngrok_url
+        
+    except Exception as e:
+        print(f"Ngrok kurulum hatası: {e}")
+        print("Ngrok olmadan local modda çalışacak...")
+        return None
+
+def cleanup_ngrok():
+    """Ngrok temizleme"""
+    try:
+        if NGROK_TUNNEL:
+            ngrok.disconnect(NGROK_TUNNEL.public_url)
+        ngrok.kill()
+        print("Ngrok tunnel kapatıldı.")
+    except:
+        pass
+
+def signal_handler(sig, frame):
+    """Çıkış sinyali yakalama"""
+    print("\nUygulama kapatılıyor...")
+    cleanup_ngrok()
+    sys.exit(0)
+
+# Çıkış işleyicilerini kaydet
+atexit.register(cleanup_ngrok)
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 class HaberYoneticisi:
     def __init__(self):
@@ -198,10 +270,23 @@ class HaberYoneticisi:
     def haberi_yayinla(self, baslik, icerik, etiketler, kategori_id=None, resim_yolu=None):
         """Haberi WordPress'e yayınla"""
         try:
+            print(f"DEBUG: Yayın başlıyor...")
+            print(f"DEBUG: Başlık: {baslik}")
+            print(f"DEBUG: Resim yolu: {resim_yolu}")
+            
             # Kapak fotoğrafı yükle
             kapak_fotografi_id = None
             if resim_yolu and os.path.exists(resim_yolu):
+                print(f"DEBUG: Resim dosyası bulundu: {resim_yolu}")
+                print(f"DEBUG: Dosya boyutu: {os.path.getsize(resim_yolu)} bytes")
                 kapak_fotografi_id = self.wordpress_medya_yukle(resim_yolu)
+                print(f"DEBUG: WordPress medya ID: {kapak_fotografi_id}")
+            else:
+                print(f"DEBUG: Resim dosyası bulunamadı veya yol boş: {resim_yolu}")
+                if resim_yolu:
+                    print(f"DEBUG: Dosya var mı kontrol: {os.path.exists(resim_yolu)}")
+                    if os.path.exists(os.path.dirname(resim_yolu)):
+                        print(f"DEBUG: Klasör içeriği: {os.listdir(os.path.dirname(resim_yolu))}")
             
             # Etiket ID'lerini al
             tag_ids = []
@@ -222,24 +307,52 @@ class HaberYoneticisi:
             
             if kapak_fotografi_id:
                 data['featured_media'] = kapak_fotografi_id
+                print(f"DEBUG: Featured media ID eklendi: {kapak_fotografi_id}")
+            else:
+                print("DEBUG: Kapak fotoğrafı ID'si yok!")
+            
+            print(f"DEBUG: WordPress'e gönderilecek data: {data}")
             
             response = requests.post(f'{self.WORDPRESS_URL}/wp-json/wp/v2/posts', 
                                    auth=self.WP_AUTH, json=data)
             
+            print(f"DEBUG: WordPress response status: {response.status_code}")
+            
             if response.status_code == 201:
                 post_data = response.json()
+                print(f"DEBUG: Post başarıyla oluşturuldu: {post_data.get('id')}")
+                
+                # BAŞARILI YAYINDAN SONRA RESMİ SİL
+                if resim_yolu and os.path.exists(resim_yolu) and kapak_fotografi_id:
+                    try:
+                        os.remove(resim_yolu)
+                        print(f"DEBUG: Resim dosyası silindi: {resim_yolu}")
+                    except Exception as delete_error:
+                        print(f"DEBUG: Resim silme hatası: {delete_error}")
+                        # Silme hatası yayını etkilemez, devam et
+                
                 return {'success': True, 'link': post_data.get('link', 'Link alınamadı')}
             else:
+                print(f"DEBUG: WordPress error response: {response.text}")
+                # Yayın başarısız olursa resmi silme
                 return {'success': False, 'error': f"HTTP {response.status_code}: {response.text}"}
                 
         except Exception as e:
+            print(f"DEBUG: Exception in haberi_yayinla: {str(e)}")
+            # Exception durumunda da resmi silme
             return {'success': False, 'error': str(e)}
             
     def wordpress_medya_yukle(self, dosya_yolu):
         """WordPress'e medya yükle"""
         try:
+            print(f"DEBUG: WordPress medya yükleme başlıyor: {dosya_yolu}")
+            
             if not os.path.exists(dosya_yolu):
+                print(f"DEBUG: Dosya bulunamadı: {dosya_yolu}")
                 return None
+            
+            file_size = os.path.getsize(dosya_yolu)
+            print(f"DEBUG: Dosya boyutu: {file_size} bytes")
             
             mime_types = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', 
                          '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp'}
@@ -248,20 +361,40 @@ class HaberYoneticisi:
             uzanti = os.path.splitext(dosya_adi)[1].lower()
             content_type = mime_types.get(uzanti, 'image/jpeg')
             
+            print(f"DEBUG: Dosya adı: {dosya_adi}")
+            print(f"DEBUG: Uzantı: {uzanti}")
+            print(f"DEBUG: Content type: {content_type}")
+            
             with open(dosya_yolu, 'rb') as f:
+                file_data = f.read()
+                print(f"DEBUG: Dosya okundu, boyut: {len(file_data)} bytes")
+                
                 headers = {
                     'Content-Type': content_type,
                     'Content-Disposition': f'attachment; filename="{dosya_adi}"'
                 }
                 
+                print(f"DEBUG: WordPress medya URL: {self.WORDPRESS_URL}/wp-json/wp/v2/media")
+                print(f"DEBUG: Headers: {headers}")
+                
                 response = requests.post(f'{self.WORDPRESS_URL}/wp-json/wp/v2/media', 
-                                       auth=self.WP_AUTH, headers=headers, data=f.read())
+                                       auth=self.WP_AUTH, headers=headers, data=file_data)
+                
+                print(f"DEBUG: WordPress medya response status: {response.status_code}")
                 
                 if response.status_code == 201:
-                    return response.json().get('id')
-            return None
+                    response_data = response.json()
+                    media_id = response_data.get('id')
+                    print(f"DEBUG: WordPress medya başarıyla yüklendi, ID: {media_id}")
+                    print(f"DEBUG: Medya URL: {response_data.get('source_url', 'N/A')}")
+                    return media_id
+                else:
+                    print(f"DEBUG: WordPress medya yükleme hatası: {response.status_code}")
+                    print(f"DEBUG: Error response: {response.text}")
+                    return None
             
-        except:
+        except Exception as e:
+            print(f"DEBUG: WordPress medya yükleme exception: {str(e)}")
             return None
             
     def etiket_olustur_veya_bul(self, etiket_adi):
@@ -286,6 +419,48 @@ class HaberYoneticisi:
             return None
         except:
             return None
+    
+    def eski_resimleri_temizle(self, max_yas_saat=24):
+        """Eski yüklenen resimleri temizle (varsayılan: 24 saat)"""
+        try:
+            if not os.path.exists(self.IMAGE_FOLDER):
+                print("DEBUG CLEANUP: Image folder bulunamadı")
+                return
+            
+            import time
+            from datetime import datetime, timedelta
+            
+            simdiki_zaman = time.time()
+            max_yas_saniye = max_yas_saat * 3600
+            silinen_dosyalar = []
+            
+            print(f"DEBUG CLEANUP: {max_yas_saat} saatten eski dosyalar temizleniyor...")
+            
+            for dosya in os.listdir(self.IMAGE_FOLDER):
+                dosya_yolu = os.path.join(self.IMAGE_FOLDER, dosya)
+                
+                if os.path.isfile(dosya_yolu):
+                    dosya_zamani = os.path.getmtime(dosya_yolu)
+                    dosya_yasi = simdiki_zaman - dosya_zamani
+                    
+                    if dosya_yasi > max_yas_saniye:
+                        try:
+                            os.remove(dosya_yolu)
+                            silinen_dosyalar.append(dosya)
+                            print(f"DEBUG CLEANUP: Eski dosya silindi: {dosya}")
+                        except Exception as e:
+                            print(f"DEBUG CLEANUP: Dosya silme hatası {dosya}: {e}")
+            
+            if silinen_dosyalar:
+                print(f"DEBUG CLEANUP: {len(silinen_dosyalar)} eski dosya temizlendi")
+            else:
+                print("DEBUG CLEANUP: Silinecek eski dosya bulunamadı")
+                
+            return len(silinen_dosyalar)
+            
+        except Exception as e:
+            print(f"DEBUG CLEANUP: Cleanup hatası: {e}")
+            return 0
 
 # Global yönetici instance
 yonetici = HaberYoneticisi()
@@ -414,6 +589,11 @@ def api_haberi_yayinla():
         kategori_id = data.get('kategori_id')
         resim_dosyasi = data.get('resim_dosyasi')
         
+        print(f"DEBUG API: Gelen data:")
+        print(f"DEBUG API: Başlık: {baslik}")
+        print(f"DEBUG API: Resim dosyası: {resim_dosyasi}")
+        print(f"DEBUG API: IMAGE_FOLDER: {yonetici.IMAGE_FOLDER}")
+        
         if not baslik or not icerik:
             return jsonify({'success': False, 'error': 'Başlık ve içerik gerekli'})
         
@@ -421,17 +601,30 @@ def api_haberi_yayinla():
         if not resim_dosyasi:
             return jsonify({'success': False, 'error': 'Kapak fotoğrafı seçmek zorunludur!'})
         
-        # Resim yolunu belirle
+        # Resim yolunu belirle - BU KISIM ÖNEMLİ
         resim_yolu = os.path.join(yonetici.IMAGE_FOLDER, resim_dosyasi)
+        print(f"DEBUG API: Oluşturulan resim yolu: {resim_yolu}")
+        print(f"DEBUG API: Mutlak yol: {os.path.abspath(resim_yolu)}")
         
         if not os.path.exists(resim_yolu):
-            return jsonify({'success': False, 'error': 'Seçilen fotoğraf bulunamadı!'})
+            print(f"DEBUG API: Resim dosyası bulunamadı!")
+            print(f"DEBUG API: Aranan yol: {resim_yolu}")
+            if os.path.exists(yonetici.IMAGE_FOLDER):
+                print(f"DEBUG API: IMAGE_FOLDER içeriği: {os.listdir(yonetici.IMAGE_FOLDER)}")
+            else:
+                print(f"DEBUG API: IMAGE_FOLDER mevcut değil: {yonetici.IMAGE_FOLDER}")
+            return jsonify({'success': False, 'error': f'Seçilen fotoğraf bulunamadı! Aranan: {resim_yolu}'})
+        
+        print(f"DEBUG API: Resim dosyası bulundu, boyut: {os.path.getsize(resim_yolu)} bytes")
         
         # Yayınla
         sonuc = yonetici.haberi_yayinla(baslik, icerik, etiketler, kategori_id, resim_yolu)
+        
+        print(f"DEBUG API: Yayın sonucu: {sonuc}")
         return jsonify(sonuc)
         
     except Exception as e:
+        print(f"DEBUG API: Exception: {str(e)}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/static/images/<filename>')
@@ -443,6 +636,8 @@ def uploaded_file(filename):
 def api_fotograf_yukle():
     """API: Fotoğraf yükle"""
     try:
+        print(f"DEBUG UPLOAD: Fotoğraf yükleme başlıyor...")
+        
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': 'Dosya seçilmedi'})
         
@@ -451,22 +646,34 @@ def api_fotograf_yukle():
         if file.filename == '':
             return jsonify({'success': False, 'error': 'Dosya seçilmedi'})
         
+        print(f"DEBUG UPLOAD: Gelen dosya: {file.filename}")
+        
         if file and allowed_file(file.filename):
             # Güvenli dosya adı oluştur
             filename = secure_filename(file.filename)
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
             filename = timestamp + filename
             
+            print(f"DEBUG UPLOAD: Yeni dosya adı: {filename}")
+            print(f"DEBUG UPLOAD: Upload folder: {app.config['UPLOAD_FOLDER']}")
+            
             # Klasör oluştur
             os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
             
             # Dosyayı kaydet
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            print(f"DEBUG UPLOAD: Dosya kaydedilecek yol: {filepath}")
+            print(f"DEBUG UPLOAD: Mutlak yol: {os.path.abspath(filepath)}")
+            
             file.save(filepath)
+            print(f"DEBUG UPLOAD: Dosya kaydedildi")
             
             # Resmi optimize et
             try:
                 with Image.open(filepath) as img:
+                    print(f"DEBUG UPLOAD: Orijinal boyut: {img.size}")
+                    print(f"DEBUG UPLOAD: Orijinal mode: {img.mode}")
+                    
                     # RGBA'yı RGB'ye çevir (JPEG için)
                     if img.mode in ('RGBA', 'LA', 'P'):
                         background = Image.new('RGB', img.size, (255, 255, 255))
@@ -474,21 +681,31 @@ def api_fotograf_yukle():
                             img = img.convert('RGBA')
                         background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
                         img = background
+                        print(f"DEBUG UPLOAD: Mode çevrildi: RGB")
                     
                     # Boyutları kontrol et ve küçült
                     max_size = (1200, 800)
                     if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
                         img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                        print(f"DEBUG UPLOAD: Boyut küçültüldü: {img.size}")
                     
                     # JPEG olarak kaydet
                     if not filename.lower().endswith('.jpg'):
                         filename = os.path.splitext(filename)[0] + '.jpg'
                         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                        print(f"DEBUG UPLOAD: JPEG uzantısı eklendi: {filename}")
                     
                     img.save(filepath, 'JPEG', quality=85, optimize=True)
+                    print(f"DEBUG UPLOAD: Optimize edilip JPEG olarak kaydedildi")
                     
             except Exception as e:
-                print(f"Resim optimize hatası: {e}")
+                print(f"DEBUG UPLOAD: Resim optimize hatası: {e}")
+            
+            # Final kontrol
+            if os.path.exists(filepath):
+                final_size = os.path.getsize(filepath)
+                print(f"DEBUG UPLOAD: Final dosya boyutu: {final_size} bytes")
+                print(f"DEBUG UPLOAD: Final dosya yolu: {filepath}")
             
             return jsonify({
                 'success': True, 
@@ -499,7 +716,100 @@ def api_fotograf_yukle():
         return jsonify({'success': False, 'error': 'Geçersiz dosya türü'})
         
     except Exception as e:
+        print(f"DEBUG UPLOAD: Exception: {str(e)}")
         return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/eski-resimleri-temizle', methods=['POST'])
+def api_eski_resimleri_temizle():
+    """API: Eski resimleri temizle"""
+    try:
+        data = request.get_json() or {}
+        max_yas_saat = data.get('max_yas_saat', 24)  # Varsayılan 24 saat
+        
+        silinen_sayisi = yonetici.eski_resimleri_temizle(max_yas_saat)
+        
+        return jsonify({
+            'success': True,
+            'message': f'{silinen_sayisi} eski dosya temizlendi',
+            'silinen_sayisi': silinen_sayisi
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/sunucu-bilgileri', methods=['GET'])
+def api_sunucu_bilgileri():
+    """API: Sunucu ve depolama bilgileri"""
+    try:
+        import shutil
+        
+        # Disk kullanımı
+        total, used, free = shutil.disk_usage('.')
+        
+        # Image folder bilgileri
+        image_count = 0
+        total_image_size = 0
+        
+        if os.path.exists(yonetici.IMAGE_FOLDER):
+            for dosya in os.listdir(yonetici.IMAGE_FOLDER):
+                dosya_yolu = os.path.join(yonetici.IMAGE_FOLDER, dosya)
+                if os.path.isfile(dosya_yolu):
+                    image_count += 1
+                    total_image_size += os.path.getsize(dosya_yolu)
+        
+        return jsonify({
+            'disk_kullanimi': {
+                'toplam_gb': round(total / (1024**3), 2),
+                'kullanilan_gb': round(used / (1024**3), 2),
+                'bos_gb': round(free / (1024**3), 2),
+                'kullanim_yuzdesi': round((used / total) * 100, 1)
+            },
+            'resim_depolama': {
+                'resim_sayisi': image_count,
+                'toplam_boyut_mb': round(total_image_size / (1024**2), 2),
+                'klasor_yolu': yonetici.IMAGE_FOLDER
+            },
+            'haber_istatistikleri': {
+                'toplam_haber': len(yonetici.haberler),
+                'yeni_haber': len([h for h in yonetici.haberler if h.get('durum') == 'Yeni'])
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+if __name__ == '__main__':
+    # Upload klasörünü oluştur
+    os.makedirs('static/uploads', exist_ok=True)
+    os.makedirs('static/images', exist_ok=True)
+    
+    print("İstanbul Son Dakika - Haber Yönetim Sistemi")
+    print("=" * 50)
+    
+    # Ngrok tunnel'ını başlat
+    public_url = setup_ngrok()
+    
+    try:
+        # Flask uygulamasını başlat
+        if public_url:
+            print("Flask sunucusu ngrok ile başlatılıyor...")
+        else:
+            print("Flask sunucusu local modda başlatılıyor...")
+            
+        app.run(
+            debug=False,  # Ngrok ile debug=False öneriliyor
+            host='0.0.0.0', 
+            port=5000,
+            threaded=True,
+            use_reloader=False  # Ngrok ile reloader kapalı
+        )
+        
+    except KeyboardInterrupt:
+        print("\nUygulama durduruldu.")
+    except Exception as e:
+        print(f"Sunucu hatası: {e}")
+    finally:
+        cleanup_ngrok()
 
 import os
 
