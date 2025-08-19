@@ -501,9 +501,10 @@ def api_fotograf_yukle():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-if __name__ == '__main__':
-    # Upload klasörünü oluştur
+import os
+
+if _name_ == "_main_":
     os.makedirs('static/uploads', exist_ok=True)
     
-    # Debug mode'da çalıştır
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    port = int(os.environ.get("PORT", 5000))  # Render'ın verdiği PORT'u al
+    app.run(host="0.0.0.0", port=port)
