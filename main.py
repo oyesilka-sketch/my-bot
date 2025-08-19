@@ -121,13 +121,24 @@ class HaberYoneticisi:
             self.GOOGLE_AI_KEY = self.config['google_ai']['api_key']
             genai.configure(api_key=self.GOOGLE_AI_KEY)
             
-            # Diğer ayarlar
-            self.IMAGE_FOLDER = self.config['settings']['image_folder']
-            self.ONCEKI_HABERLER_FILE = self.config['settings']['onceki_haberler_file']
-            self.ONCEKI_GUNCEL_HABERLER_FILE = self.config['settings']['onceki_guncel_haberler_file']
+            # KLASÖR UYUMLULUĞU İÇİN DÜZELTME
+            # Flask app.config ile aynı klasörü kullan
+            self.IMAGE_FOLDER = app.config['UPLOAD_FOLDER']  # 'static/images' kullan
+            
+            print(f"DEBUG CONFIG: IMAGE_FOLDER ayarlandı: {self.IMAGE_FOLDER}")
+            print(f"DEBUG CONFIG: Flask UPLOAD_FOLDER: {app.config['UPLOAD_FOLDER']}")
+            
+            # Config dosyasındaki diğer ayarlar
+            config_settings = self.config.get('settings', {})
+            self.ONCEKI_HABERLER_FILE = config_settings.get('onceki_haberler_file', 'data/onceki_istanbul_haberler.json')
+            self.ONCEKI_GUNCEL_HABERLER_FILE = config_settings.get('onceki_guncel_haberler_file', 'data/onceki_guncel_haberler.json')
             
         except Exception as e:
             print(f"Config yükleme hatası: {e}")
+            # Fallback values
+            self.IMAGE_FOLDER = app.config['UPLOAD_FOLDER']
+            self.ONCEKI_HABERLER_FILE = 'data/onceki_istanbul_haberler.json'
+            self.ONCEKI_GUNCEL_HABERLER_FILE = 'data/onceki_guncel_haberler.json'
             
     def haberleri_yenile(self):
         """Haberleri yeniden çek"""
@@ -689,6 +700,8 @@ def api_fotograf_yukle():
     """API: Fotoğraf yükle - Render.com uyumlu"""
     try:
         print(f"DEBUG UPLOAD: Fotoğraf yükleme başlıyor...")
+        print(f"DEBUG UPLOAD: Flask UPLOAD_FOLDER: {app.config['UPLOAD_FOLDER']}")
+        print(f"DEBUG UPLOAD: Yönetici IMAGE_FOLDER: {yonetici.IMAGE_FOLDER}")
         print(f"DEBUG UPLOAD: Render ortamı: {bool(os.environ.get('RENDER'))}")
         
         if 'file' not in request.files:
@@ -719,11 +732,14 @@ def api_fotograf_yukle():
                 filename = timestamp + original_filename
             
             print(f"DEBUG UPLOAD: Yeni dosya adı: {filename}")
-            print(f"DEBUG UPLOAD: Upload folder: {app.config['UPLOAD_FOLDER']}")
+            
+            # TEK KLASÖR KULLAN - TUTARLILIK İÇİN
+            upload_folder = app.config['UPLOAD_FOLDER']  # Her zaman aynı klasör
+            print(f"DEBUG UPLOAD: Kullanılacak klasör: {upload_folder}")
             
             # Klasörü kesinlikle oluştur
-            upload_folder = app.config['UPLOAD_FOLDER']
             os.makedirs(upload_folder, exist_ok=True)
+            print(f"DEBUG UPLOAD: Klasör oluşturuldu/var: {upload_folder}")
             
             # Render.com için disk kontrolü
             if os.environ.get('RENDER'):
@@ -734,11 +750,20 @@ def api_fotograf_yukle():
                 
                 if free_mb < 50:  # 50MB'dan az boş yer
                     print(f"DEBUG UPLOAD: Düşük disk alanı, eski dosyalar temizleniyor...")
-                    yonetici.eski_resimleri_temizle(1)  # 1 saatten eski dosyaları sil
+                    # Render'da eski dosyaları temizle
+                    try:
+                        for old_file in os.listdir(upload_folder):
+                            if old_file.startswith('img_'):  # Sadece yüklenen resimleri sil
+                                old_path = os.path.join(upload_folder, old_file)
+                                os.remove(old_path)
+                                print(f"DEBUG UPLOAD: Eski dosya silindi: {old_file}")
+                    except Exception as cleanup_error:
+                        print(f"DEBUG UPLOAD: Cleanup hatası: {cleanup_error}")
             
             # Dosyayı kaydet
             filepath = os.path.join(upload_folder, filename)
             print(f"DEBUG UPLOAD: Dosya kaydedilecek yol: {filepath}")
+            print(f"DEBUG UPLOAD: Mutlak yol: {os.path.abspath(filepath)}")
             
             try:
                 file.save(filepath)
@@ -750,6 +775,11 @@ def api_fotograf_yukle():
                 
                 file_size = os.path.getsize(filepath)
                 print(f"DEBUG UPLOAD: Kaydedilen dosya boyutu: {file_size} bytes")
+                
+                # Klasör içeriğini kontrol et
+                folder_contents = os.listdir(upload_folder)
+                print(f"DEBUG UPLOAD: Klasör içeriği: {folder_contents}")
+                print(f"DEBUG UPLOAD: Yeni dosya listede var mı: {filename in folder_contents}")
                 
             except Exception as save_error:
                 print(f"DEBUG UPLOAD: Dosya kaydetme hatası: {save_error}")
@@ -799,6 +829,10 @@ def api_fotograf_yukle():
                 final_size = os.path.getsize(filepath)
                 print(f"DEBUG UPLOAD: Final dosya boyutu: {final_size} bytes")
                 
+                # Final klasör kontrolü
+                final_folder_contents = os.listdir(upload_folder)
+                print(f"DEBUG UPLOAD: Final klasör içeriği: {final_folder_contents}")
+                
                 # Render.com için ek kontrol - dosyayı hemen test et
                 if os.environ.get('RENDER'):
                     try:
@@ -814,7 +848,8 @@ def api_fotograf_yukle():
                     'filename': filename,
                     'url': f'/static/images/{filename}',
                     'render_mode': bool(os.environ.get('RENDER')),
-                    'file_size': final_size
+                    'file_size': final_size,
+                    'upload_folder': upload_folder
                 })
             else:
                 print(f"DEBUG UPLOAD: Final dosya bulunamadı: {filepath}")
@@ -919,8 +954,8 @@ if __name__ == '__main__':
         print(f"Sunucu hatası: {e}")
     finally:
         cleanup_ngrok()
-        
-        import os
+
+import os
 
 if _name_ == "_main_":
     os.makedirs('static/uploads', exist_ok=True)
