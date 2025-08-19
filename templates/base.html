@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}İstanbul Son Dakika - Haber Yönetimi{% endblock %}</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <style>
+        :root {
+            --primary-color: #2C3E50;
+            --secondary-color: #3498DB;
+            --success-color: #27AE60;
+            --warning-color: #F39C12;
+            --danger-color: #E74C3C;
+            --light-color: #ECF0F1;
+            --dark-color: #34495E;
+        }
+        
+        body {
+            background-color: #f8f9fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding-bottom: 80px; /* Footer için boşluk */
+        }
+        
+        .header {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--dark-color) 100%);
+            color: white;
+            padding: 1rem 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+        
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            transition: all 0.3s ease;
+            margin-bottom: 1.5rem;
+        }
+        
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+        }
+        
+        .btn {
+            border-radius: 12px;
+            font-weight: 500;
+            padding: 12px 20px;
+            transition: all 0.3s ease;
+            border: none;
+            min-height: 48px; /* Mobil dokunma için */
+            font-size: 1rem;
+        }
+        
+        .btn:hover {
+            transform: translateY(-1px);
+        }
+        
+        .btn-lg {
+            padding: 15px 25px;
+            font-size: 1.1rem;
+            min-height: 56px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, var(--secondary-color) 0%, #2980B9 100%);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, var(--success-color) 0%, #229954 100%);
+        }
+        
+        .btn-warning {
+            background: linear-gradient(135deg, var(--warning-color) 0%, #D68910 100%);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, var(--danger-color) 0%, #C0392B 100%);
+        }
+        
+        .btn-outline-primary {
+            border: 2px solid var(--secondary-color);
+            color: var(--secondary-color);
+            background: white;
+        }
+        
+        .btn-outline-primary:hover {
+            background: var(--secondary-color);
+            color: white;
+        }
+        
+        .form-control, .form-select {
+            border-radius: 10px;
+            border: 2px solid #e9ecef;
+            padding: 12px 15px;
+            font-size: 1rem;
+            min-height: 48px;
+        }
+        
+        .form-control:focus, .form-select:focus {
+            border-color: var(--secondary-color);
+            box-shadow: 0 0 0 0.2rem rgba(52, 152, 219, 0.25);
+        }
+        
+        .news-item {
+            border-left: 4px solid var(--secondary-color);
+            transition: all 0.3s ease;
+            padding: 1.5rem;
+            cursor: pointer;
+        }
+        
+        .news-item:hover {
+            border-left-color: var(--success-color);
+            background-color: #f8f9fa;
+        }
+        
+        .news-item.new {
+            border-left-color: var(--success-color);
+            background: linear-gradient(135deg, #E8F5E8 0%, #F0FFF0 100%);
+        }
+        
+        .badge {
+            border-radius: 20px;
+            padding: 8px 15px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        
+        .status-bar {
+            background: white;
+            border-top: 1px solid #dee2e6;
+            padding: 15px 0;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+        
+        .spinner-grow {
+            width: 1rem;
+            height: 1rem;
+        }
+        
+        .filter-pills .nav-link {
+            border-radius: 25px;
+            margin: 5px;
+            color: var(--primary-color);
+            border: 2px solid transparent;
+            padding: 10px 20px;
+            font-weight: 500;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .filter-pills .nav-link.active {
+            background: var(--secondary-color);
+            color: white;
+            border-color: var(--secondary-color);
+        }
+        
+        .upload-area {
+            border: 3px dashed #dee2e6;
+            border-radius: 15px;
+            padding: 2rem;
+            text-align: center;
+            background: #f8f9fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .upload-area:hover {
+            border-color: var(--secondary-color);
+            background: #e3f2fd;
+        }
+        
+        .upload-area.dragover {
+            border-color: var(--success-color);
+            background: #e8f5e8;
+        }
+        
+        .image-preview {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .floating-action {
+            position: fixed;
+            bottom: 100px;
+            right: 20px;
+            z-index: 1001;
+        }
+        
+        .floating-action .btn {
+            border-radius: 50px;
+            padding: 15px 20px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1rem;
+            }
+            
+            .btn {
+                padding: 10px 15px;
+                font-size: 0.9rem;
+                min-height: 44px;
+            }
+            
+            .btn-lg {
+                padding: 12px 18px;
+                font-size: 1rem;
+                min-height: 48px;
+            }
+            
+            .card {
+                margin-bottom: 1rem;
+                border-radius: 12px;
+            }
+            
+            .container {
+                padding-left: 10px;
+                padding-right: 10px;
+            }
+            
+            .news-item {
+                padding: 1rem;
+            }
+            
+            .upload-area {
+                padding: 1.5rem;
+                min-height: 150px;
+            }
+        }
+        
+        @media (max-width: 576px) {
+            .header h1 {
+                font-size: 0.9rem;
+            }
+            
+            .btn {
+                padding: 8px 12px;
+                font-size: 0.85rem;
+                min-height: 40px;
+            }
+            
+            .form-control, .form-select {
+                font-size: 0.9rem;
+                min-height: 44px;
+            }
+        }
+        
+        .alert {
+            border: none;
+            border-radius: 8px;
+            padding: 12px 16px;
+        }
+        
+        .alert-success {
+            background: linear-gradient(135deg, #D4EDDA 0%, #C3E6CB 100%);
+            color: #155724;
+        }
+        
+        .alert-danger {
+            background: linear-gradient(135deg, #F8D7DA 0%, #F5C6CB 100%);
+            color: #721c24;
+        }
+        
+        .alert-warning {
+            background: linear-gradient(135deg, #FFF3CD 0%, #FFEAA7 100%);
+            color: #856404;
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+    
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-md-8">
+                    <h1><i class="fas fa-newspaper me-2"></i>İstanbul Son Dakika - Haber Yönetimi</h1>
+                </div>
+                <div class="col-md-4 text-end">
+                    <span class="text-light" id="currentTime"></span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mt-4">
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div id="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Status Bar -->
+    <footer class="status-bar">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-md-6">
+                    <span id="statusText">Hazır</span>
+                </div>
+                <div class="col-md-6 text-end">
+                    <small class="text-muted">Flask Haber Yönetim Sistemi v2.0</small>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Common JavaScript -->
+    <script>
+        // Zaman güncelleme
+        function updateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleString('tr-TR', {
+                day: '2-digit',
+                month: '2-digit', 
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            document.getElementById('currentTime').textContent = timeString;
+        }
+        
+        // Her saniye güncelle
+        setInterval(updateTime, 1000);
+        updateTime();
+        
+        // Status güncelleme
+        function updateStatus(message) {
+            document.getElementById('statusText').textContent = message;
+        }
+        
+        // Loading state
+        function setLoading(element, loading = true) {
+            if (loading) {
+                element.classList.add('loading');
+                element.disabled = true;
+            } else {
+                element.classList.remove('loading');
+                element.disabled = false;
+            }
+        }
+        
+        // Toast notification
+        function showToast(message, type = 'success') {
+            const toastHtml = `
+                <div class="toast align-items-center text-white bg-${type} border-0" role="alert">
+                    <div class="d-flex">
+                        <div class="toast-body">${message}</div>
+                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+                    </div>
+                </div>
+            `;
+            
+            let toastContainer = document.getElementById('toastContainer');
+            if (!toastContainer) {
+                toastContainer = document.createElement('div');
+                toastContainer.id = 'toastContainer';
+                toastContainer.className = 'position-fixed top-0 end-0 p-3';
+                toastContainer.style.zIndex = '1080';
+                document.body.appendChild(toastContainer);
+            }
+            
+            toastContainer.insertAdjacentHTML('beforeend', toastHtml);
+            const toastElement = toastContainer.lastElementChild;
+            const toast = new bootstrap.Toast(toastElement);
+            toast.show();
+            
+            // Toast kapandıktan sonra DOM'dan kaldır
+            toastElement.addEventListener('hidden.bs.toast', () => {
+                toastElement.remove();
+            });
+        }
+        
+        // Flash mesajları otomatik gizle
+        setTimeout(() => {
+            const flashMessages = document.getElementById('flash-messages');
+            if (flashMessages) {
+                flashMessages.style.opacity = '0';
+                setTimeout(() => {
+                    flashMessages.remove();
+                }, 500);
+            }
+        }, 5000);
+    </script>
+    
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

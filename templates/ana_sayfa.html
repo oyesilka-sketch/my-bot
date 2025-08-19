@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+
+{% block title %}Haber Listesi - İstanbul Son Dakika{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Mobil İstatistikler (üstte) -->
+    <div class="col-12 d-md-none mb-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-4">
+                        <h3 class="text-primary mb-0" id="totalNewsMobile">{{ toplam_haber }}</h3>
+                        <small class="text-muted">Toplam</small>
+                    </div>
+                    <div class="col-4">
+                        <h3 class="text-success mb-0" id="newNewsMobile">{{ yeni_haber }}</h3>
+                        <small class="text-muted">Yeni</small>
+                    </div>
+                    <div class="col-4">
+                        <button class="btn btn-success btn-sm w-100" id="refreshBtnMobile" onclick="refreshNews()">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Mobil Filtreler -->
+    <div class="col-12 d-md-none mb-3">
+        <div class="card">
+            <div class="card-body p-2">
+                <div class="d-flex flex-wrap justify-content-center">
+                    <a class="btn btn-sm {% if filtre == 'Tümü' %}btn-primary{% else %}btn-outline-primary{% endif %} m-1" 
+                       href="?filtre=Tümü">Tümü</a>
+                    <a class="btn btn-sm {% if filtre == 'Yeni' %}btn-success{% else %}btn-outline-success{% endif %} m-1" 
+                       href="?filtre=Yeni">Yeni</a>
+                    <a class="btn btn-sm {% if filtre == 'İstanbul' %}btn-info{% else %}btn-outline-info{% endif %} m-1" 
+                       href="?filtre=İstanbul">İstanbul</a>
+                    <a class="btn btn-sm {% if filtre == 'Güncel' %}btn-warning{% else %}btn-outline-warning{% endif %} m-1" 
+                       href="?filtre=Güncel">Güncel</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Desktop Sol Panel -->
+    <div class="col-lg-3 mb-4 d-none d-md-block">
+        <!-- Kontrol Paneli -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-cogs me-2"></i>Kontrol Paneli</h6>
+            </div>
+            <div class="card-body">
+                <button class="btn btn-success btn-lg w-100 mb-3" id="refreshBtn" onclick="refreshNews()">
+                    <i class="fas fa-sync-alt me-2"></i>Haberleri Yenile
+                </button>
+                <button class="btn btn-outline-secondary btn-lg w-100" onclick="showSettings()">
+                    <i class="fas fa-cog me-2"></i>Ayarlar
+                </button>
+            </div>
+        </div>
+        
+        <!-- İstatistikler -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-chart-bar me-2"></i>İstatistikler</h6>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-6">
+                        <h2 class="text-primary mb-0" id="totalNews">{{ toplam_haber }}</h2>
+                        <small class="text-muted">Toplam Haber</small>
+                    </div>
+                    <div class="col-6">
+                        <h2 class="text-success mb-0" id="newNews">{{ yeni_haber }}</h2>
+                        <small class="text-muted">Yeni Haber</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Filtreler -->
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-filter me-2"></i>Filtreler</h6>
+            </div>
+            <div class="card-body p-2">
+                <div class="nav nav-pills flex-column filter-pills">
+                    <a class="nav-link {% if filtre == 'Tümü' %}active{% endif %}" 
+                       href="?filtre=Tümü">
+                        <i class="fas fa-list me-2"></i>Tümü
+                    </a>
+                    <a class="nav-link {% if filtre == 'Yeni' %}active{% endif %}" 
+                       href="?filtre=Yeni">
+                        <i class="fas fa-star me-2"></i>Yeni Haberler
+                    </a>
+                    <a class="nav-link {% if filtre == 'İstanbul' %}active{% endif %}" 
+                       href="?filtre=İstanbul">
+                        <i class="fas fa-city me-2"></i>İstanbul
+                    </a>
+                    <a class="nav-link {% if filtre == 'Güncel' %}active{% endif %}" 
+                       href="?filtre=Güncel">
+                        <i class="fas fa-globe me-2"></i>Güncel
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Ana Panel - Haber Listesi -->
+    <div class="col-lg-9 col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="row align-items-center">
+                    <div class="col">
+                        <h5 class="mb-0">
+                            <i class="fas fa-newspaper me-2"></i>Haber Listesi
+                            <span class="badge bg-primary ms-2">{{ haberler|length }}</span>
+                        </h5>
+                    </div>
+                    <div class="col-auto d-none d-md-block">
+                        <span class="badge bg-info">{{ filtre }}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                {% if haberler %}
+                    <div class="list-group list-group-flush" id="newsList">
+                        {% for haber in haberler %}
+                        <div class="list-group-item news-item {% if haber.durum == 'Yeni' %}new{% endif %}" 
+                             data-news-id="{{ haber.id }}">
+                            <div class="row align-items-center">
+                                <div class="col-md-8 col-8">
+                                    <h6 class="mb-2 fw-bold">
+                                        {{ haber.baslik or haber.headline or 'Başlık yok' }}
+                                    </h6>
+                                    <p class="mb-2 text-muted small d-none d-md-block">
+                                        {{ (haber.description or '')[:100] }}
+                                        {% if (haber.description or '')|length > 100 %}...{% endif %}
+                                    </p>
+                                    <div class="d-flex align-items-center flex-wrap">
+                                        <span class="badge bg-{{ 'success' if haber.durum == 'Yeni' else 'secondary' }} me-2 mb-1">
+                                            {{ haber.durum }}
+                                        </span>
+                                        <span class="badge bg-info me-2 mb-1">
+                                            {{ haber.kaynak }}
+                                        </span>
+                                        <small class="text-muted d-none d-md-inline">
+                                            <i class="fas fa-clock me-1"></i>
+                                            {{ haber.tarih or 'Tarih yok' }}
+                                        </small>
+                                    </div>
+                                </div>
+                                <div class="col-md-4 col-4 text-end">
+                                    <a href="{{ url_for('haber_detay', haber_id=haber.id) }}" 
+                                       class="btn btn-primary btn-lg">
+                                        <i class="fas fa-edit d-md-none"></i>
+                                        <span class="d-none d-md-inline">
+                                            <i class="fas fa-edit me-1"></i>Düzenle
+                                        </span>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center py-5">
+                        <i class="fas fa-newspaper fa-5x text-muted mb-4"></i>
+                        <h4 class="text-muted mb-3">Henüz haber bulunmuyor</h4>
+                        <p class="text-muted mb-4">Haberleri yenilemek için butonu kullanın.</p>
+                        <button class="btn btn-primary btn-lg" onclick="refreshNews()">
+                            <i class="fas fa-sync-alt me-2"></i>Haberleri Yenile
+                        </button>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Floating Action Button (Mobil) -->
+<div class="floating-action d-md-none">
+    <button class="btn btn-success" onclick="refreshNews()" title="Haberleri Yenile">
+        <i class="fas fa-sync-alt"></i>
+    </button>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Haberleri yenile
+async function refreshNews() {
+    const refreshBtn = document.getElementById('refreshBtn');
+    const originalText = refreshBtn.innerHTML;
+    
+    try {
+        setLoading(refreshBtn);
+        refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Yenileniyor...';
+        updateStatus('Haberler çekiliyor...');
+        
+        const response = await fetch('/api/haberleri-yenile', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast(data.message, 'success');
+            updateStatus('Haberler güncellendi');
+            
+            // İstatistikleri güncelle
+            document.getElementById('totalNews').textContent = data.toplam_haber;
+            document.getElementById('newNews').textContent = data.yeni_haber;
+            
+            // Mobil istatistikleri de güncelle
+            const totalMobile = document.getElementById('totalNewsMobile');
+            const newMobile = document.getElementById('newNewsMobile');
+            if (totalMobile) totalMobile.textContent = data.toplam_haber;
+            if (newMobile) newMobile.textContent = data.yeni_haber;
+            
+            // Sayfayı yenile
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+        } else {
+            showToast('Haber yenileme hatası: ' + data.error, 'danger');
+            updateStatus('Hata oluştu');
+        }
+    } catch (error) {
+        showToast('Bağlantı hatası: ' + error.message, 'danger');
+        updateStatus('Bağlantı hatası');
+    } finally {
+        setLoading(refreshBtn, false);
+        refreshBtn.innerHTML = originalText;
+    }
+}
+
+// Ayarları göster
+function showSettings() {
+    showToast('Ayarlar özelliği geliştirme aşamasında...', 'info');
+}
+
+// Haber listesi hover efekti
+document.addEventListener('DOMContentLoaded', function() {
+    const newsItems = document.querySelectorAll('.news-item');
+    
+    newsItems.forEach(item => {
+        item.addEventListener('mouseenter', function() {
+            this.style.transform = 'translateX(5px)';
+            this.style.transition = 'all 0.3s ease';
+        });
+        
+        item.addEventListener('mouseleave', function() {
+            this.style.transform = 'translateX(0)';
+        });
+    });
+    
+    // Fade in animasyonu
+    newsItems.forEach((item, index) => {
+        item.style.opacity = '0';
+        item.style.transform = 'translateY(20px)';
+        
+        setTimeout(() => {
+            item.style.transition = 'all 0.5s ease';
+            item.style.opacity = '1';
+            item.style.transform = 'translateY(0)';
+        }, index * 100);
+    });
+});
+
+// Auto refresh (5 dakikada bir)
+setInterval(() => {
+    const lastRefresh = localStorage.getItem('lastRefresh');
+    const now = Date.now();
+    
+    if (!lastRefresh || now - parseInt(lastRefresh) > 300000) { // 5 dakika
+        console.log('Auto refreshing news...');
+        refreshNews();
+        localStorage.setItem('lastRefresh', now.toString());
+    }
+}, 300000);
+
+// Sayfa yüklendiğinde son yenileme zamanını kaydet
+document.addEventListener('DOMContentLoaded', function() {
+    localStorage.setItem('lastRefresh', Date.now().toString());
+});
+</script>
+{% endblock %}

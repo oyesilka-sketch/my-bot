@@ -1,0 +1,627 @@
+{% extends "base.html" %}
+
+{% block title %}{{ haber.baslik or haber.headline or 'Haber Düzenle' }} - İstanbul Son Dakika{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Ana Panel - Haber Bilgileri ve Editor -->
+    <div class="col-lg-8 mb-4">
+        <!-- Geri Dön ve Mobil Aksiyonlar -->
+        <div class="mb-3 d-flex justify-content-between align-items-center">
+            <a href="{{ url_for('ana_sayfa') }}" class="btn btn-outline-secondary btn-lg">
+                <i class="fas fa-arrow-left me-2"></i>Geri Dön
+            </a>
+            <div class="d-md-none">
+                <button class="btn btn-warning btn-lg" id="aiRewriteBtnMobile" onclick="aiRewrite()">
+                    <i class="fas fa-magic"></i>
+                </button>
+            </div>
+        </div>
+        
+        <!-- Haber Detayları -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-info-circle me-2"></i>Haber Detayları</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Başlık:</label>
+                    <p class="mb-2">{{ haber.baslik or haber.headline or 'Başlık yok' }}</p>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Açıklama:</label>
+                    <p class="mb-2 text-muted">{{ haber.description or 'Açıklama yok' }}</p>
+                </div>
+                
+                <div class="row text-center">
+                    <div class="col-4">
+                        <span class="badge bg-{{ 'success' if haber.durum == 'Yeni' else 'secondary' }} w-100 p-2">
+                            {{ haber.durum }}
+                        </span>
+                    </div>
+                    <div class="col-4">
+                        <span class="badge bg-info w-100 p-2">{{ haber.kaynak }}</span>
+                    </div>
+                    <div class="col-4">
+                        <small class="text-muted">{{ haber.tarih or 'Tarih yok' }}</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- AI Editör -->
+        <div class="card">
+            <div class="card-header">
+                <div class="row align-items-center">
+                    <div class="col">
+                        <h5 class="mb-0"><i class="fas fa-robot me-2"></i>AI Haber Editörü</h5>
+                        <span class="word-count text-success fw-bold" id="wordCount">Kelime: 0</span>
+                    </div>
+                    <div class="col-auto d-none d-md-block">
+                        <button class="btn btn-warning btn-lg" id="aiRewriteBtn" onclick="aiRewrite()">
+                            <i class="fas fa-magic me-2"></i>AI ile Yeniden Yaz
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <textarea class="form-control" id="contentEditor" 
+                              rows="15" placeholder="Haber içeriği buraya yazılacak..."></textarea>
+                    <small class="text-muted mt-2 d-block">
+                        <i class="fas fa-info-circle me-1"></i>
+                        HTML etiketleri desteklenir. 600-700 kelime arası ideal.
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Yan Panel - Fotoğraf ve Yayın -->
+    <div class="col-lg-4">
+        <!-- Kapak Fotoğrafı -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h6 class="mb-0 text-center">
+                    <i class="fas fa-image me-2"></i>Kapak Fotoğrafı 
+                    <span class="text-danger">*</span>
+                </h6>
+            </div>
+            <div class="card-body">
+                <!-- Fotoğraf Yükleme Alanı -->
+                <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+                    <div id="uploadContent">
+                        <i class="fas fa-cloud-upload-alt fa-3x text-muted mb-3"></i>
+                        <h6 class="text-muted mb-2">Fotoğraf Yükle</h6>
+                        <p class="text-muted small mb-0">Tıklayın veya sürükleyin</p>
+                        <small class="text-muted">JPG, PNG, GIF (Max 16MB)</small>
+                    </div>
+                    <div id="imagePreview" class="d-none text-center">
+                        <img id="previewImage" src="" alt="Önizleme" class="image-preview mb-3">
+                        <div id="imageInfo" class="text-center">
+                            <small class="text-muted">Yüklenmiş fotoğraf</small>
+                        </div>
+                    </div>
+                </div>
+                
+                <input type="file" id="fileInput" accept="image/*" style="display: none;">
+                <input type="hidden" id="selectedImage" value="">
+                
+                <!-- Fotoğraf Aksiyonları -->
+                <div class="row mt-3">
+                    <div class="col-6">
+                        <button class="btn btn-outline-danger btn-lg w-100" id="removeImageBtn" onclick="removeImage()" style="display: none;">
+                            <i class="fas fa-trash me-1"></i>Kaldır
+                        </button>
+                    </div>
+                    <div class="col-6">
+                        <button class="btn btn-outline-primary btn-lg w-100" onclick="document.getElementById('fileInput').click()">
+                            <i class="fas fa-exchange-alt me-1"></i>Değiştir
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Yükleme Progress -->
+                <div class="progress mt-3" id="uploadProgress" style="display: none;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                         role="progressbar" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Yayın Ayarları -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-cogs me-2"></i>Yayın Ayarları</h6>
+            </div>
+            <div class="card-body">
+                <!-- Kategori -->
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Kategori:</label>
+                    <select class="form-select form-select-lg" id="categorySelect">
+                        <option value="">Kategori seçin...</option>
+                        {% for kategori in kategoriler %}
+                        <option value="{{ kategori.id }}">{{ kategori.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <!-- Etiketler -->
+                <div class="mb-4">
+                    <label class="form-label fw-bold">Etiketler:</label>
+                    <textarea class="form-control" id="tagsInput" rows="4" 
+                              placeholder="Etiketleri virgülle ayırarak yazın..."></textarea>
+                    <small class="text-muted">Örnek: istanbul, haber, güncel</small>
+                </div>
+                
+                <!-- Yayın Butonu -->
+                <button class="btn btn-success btn-lg w-100" id="publishBtn" onclick="publishNews()" disabled>
+                    <i class="fas fa-rocket me-2"></i>Yayınla
+                </button>
+                
+                <div class="alert alert-warning mt-3 small">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    Yayınlamadan önce fotoğraf seçmeyi unutmayın!
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Confirmation Modal -->
+<div class="modal fade" id="confirmModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-question-circle me-2 text-warning"></i>
+                    Yayın Onayı
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="text-center">
+                    <i class="fas fa-rocket fa-3x text-success mb-3"></i>
+                    <h5>Haberi yayınlamak istediğinizden emin misiniz?</h5>
+                    <p class="text-muted">Bu işlem geri alınamaz.</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary btn-lg" data-bs-dismiss="modal">
+                    <i class="fas fa-times me-2"></i>İptal
+                </button>
+                <button type="button" class="btn btn-success btn-lg" onclick="confirmPublish()">
+                    <i class="fas fa-rocket me-2"></i>Yayınla
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Floating Publish Button (Mobil) -->
+<div class="floating-action d-md-none">
+    <button class="btn btn-success btn-lg" id="publishBtnMobile" onclick="publishNews()" disabled>
+        <i class="fas fa-rocket"></i>
+    </button>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const haberData = {{ haber | tojson }};
+
+// Sayfa yüklendiğinde
+document.addEventListener('DOMContentLoaded', function() {
+    updateWordCount();
+    checkPublishButton();
+    setupFileUpload();
+    
+    // Kelime sayısını güncelle
+    document.getElementById('contentEditor').addEventListener('input', function() {
+        updateWordCount();
+        checkPublishButton();
+    });
+    
+    // Etiketler değiştiğinde
+    document.getElementById('tagsInput').addEventListener('input', checkPublishButton);
+});
+
+// Dosya yükleme ayarları
+function setupFileUpload() {
+    const fileInput = document.getElementById('fileInput');
+    const uploadArea = document.getElementById('uploadArea');
+    
+    // Dosya seçildiğinde
+    fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            uploadFile(file);
+        }
+    });
+    
+    // Drag & Drop
+    uploadArea.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        uploadArea.classList.add('dragover');
+    });
+    
+    uploadArea.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        uploadArea.classList.remove('dragover');
+    });
+    
+    uploadArea.addEventListener('drop', function(e) {
+        e.preventDefault();
+        uploadArea.classList.remove('dragover');
+        
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('image/')) {
+            uploadFile(file);
+        } else {
+            showToast('Lütfen geçerli bir resim dosyası seçin!', 'danger');
+        }
+    });
+}
+
+// Dosya yükle
+async function uploadFile(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const uploadProgress = document.getElementById('uploadProgress');
+    const progressBar = uploadProgress.querySelector('.progress-bar');
+    
+    try {
+        // Progress göster
+        uploadProgress.style.display = 'block';
+        progressBar.style.width = '0%';
+        
+        updateStatus('Fotoğraf yükleniyor...');
+        
+        // Simüle progress
+        let progress = 0;
+        const progressInterval = setInterval(() => {
+            progress += Math.random() * 30;
+            if (progress > 90) progress = 90;
+            progressBar.style.width = progress + '%';
+        }, 200);
+        
+        const response = await fetch('/api/fotograf-yukle', {
+            method: 'POST',
+            body: formData
+        });
+        
+        clearInterval(progressInterval);
+        progressBar.style.width = '100%';
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showImagePreview(data.url, data.filename);
+            document.getElementById('selectedImage').value = data.filename;
+            showToast('Fotoğraf başarıyla yüklendi!', 'success');
+            updateStatus('Fotoğraf yüklendi');
+            checkPublishButton();
+        } else {
+            showToast('Yükleme hatası: ' + data.error, 'danger');
+            updateStatus('Yükleme hatası');
+        }
+    } catch (error) {
+        showToast('Bağlantı hatası: ' + error.message, 'danger');
+        updateStatus('Bağlantı hatası');
+    } finally {
+        setTimeout(() => {
+            uploadProgress.style.display = 'none';
+        }, 1000);
+    }
+}
+
+// Resim önizlemesi göster
+function showImagePreview(url, filename) {
+    const uploadContent = document.getElementById('uploadContent');
+    const imagePreview = document.getElementById('imagePreview');
+    const previewImage = document.getElementById('previewImage');
+    const imageInfo = document.getElementById('imageInfo');
+    const removeBtn = document.getElementById('removeImageBtn');
+    
+    uploadContent.classList.add('d-none');
+    imagePreview.classList.remove('d-none');
+    removeBtn.style.display = 'block';
+    
+    previewImage.src = url;
+    imageInfo.innerHTML = `<small class="text-success fw-bold">${filename}</small>`;
+}
+
+// Resmi kaldır
+function removeImage() {
+    const uploadContent = document.getElementById('uploadContent');
+    const imagePreview = document.getElementById('imagePreview');
+    const removeBtn = document.getElementById('removeImageBtn');
+    
+    uploadContent.classList.remove('d-none');
+    imagePreview.classList.add('d-none');
+    removeBtn.style.display = 'none';
+    
+    document.getElementById('selectedImage').value = '';
+    document.getElementById('fileInput').value = '';
+    
+    checkPublishButton();
+    showToast('Fotoğraf kaldırıldı', 'info');
+}
+
+// Kelime sayısını güncelle
+async function updateWordCount() {
+    const content = document.getElementById('contentEditor').value;
+    
+    try {
+        const response = await fetch('/api/kelime-sayisi', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ icerik: content })
+        });
+        
+        const data = await response.json();
+        const wordCountEl = document.getElementById('wordCount');
+        wordCountEl.textContent = `Kelime: ${data.kelime_sayisi}`;
+        
+        // Kelime sayısına göre renk
+        if (data.kelime_sayisi >= 600 && data.kelime_sayisi <= 700) {
+            wordCountEl.className = 'word-count text-success fw-bold';
+        } else if (data.kelime_sayisi > 400) {
+            wordCountEl.className = 'word-count text-warning fw-bold';
+        } else {
+            wordCountEl.className = 'word-count text-muted fw-bold';
+        }
+    } catch (error) {
+        console.error('Kelime sayısı hesaplama hatası:', error);
+    }
+}
+
+// AI ile yeniden yaz
+async function aiRewrite() {
+    const aiBtn = document.getElementById('aiRewriteBtn');
+    const aiBtnMobile = document.getElementById('aiRewriteBtnMobile');
+    const originalText = aiBtn ? aiBtn.innerHTML : '';
+    const originalMobileText = aiBtnMobile ? aiBtnMobile.innerHTML : '';
+    
+    try {
+        if (aiBtn) {
+            setLoading(aiBtn);
+            aiBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>AI yazıyor...';
+        }
+        if (aiBtnMobile) {
+            setLoading(aiBtnMobile);
+            aiBtnMobile.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        }
+        
+        updateStatus('AI ile haber yazılıyor...');
+        
+        const response = await fetch('/api/ai-yeniden-yaz', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ haber_id: haberData.id })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            document.getElementById('contentEditor').value = data.icerik;
+            document.getElementById('tagsInput').value = data.etiketler.join(', ');
+            
+            updateWordCount();
+            checkPublishButton();
+            
+            showToast(`AI ile yazıldı - ${data.kelime_sayisi} kelime`, 'success');
+            updateStatus(`AI ile yazıldı - ${data.kelime_sayisi} kelime`);
+        } else {
+            showToast('AI yazma hatası: ' + data.error, 'danger');
+            updateStatus('AI yazma hatası');
+        }
+    } catch (error) {
+        showToast('Bağlantı hatası: ' + error.message, 'danger');
+        updateStatus('Bağlantı hatası');
+    } finally {
+        if (aiBtn) {
+            setLoading(aiBtn, false);
+            aiBtn.innerHTML = originalText;
+        }
+        if (aiBtnMobile) {
+            setLoading(aiBtnMobile, false);
+            aiBtnMobile.innerHTML = originalMobileText;
+        }
+    }
+}
+
+// Yayın butonunu kontrol et
+function checkPublishButton() {
+    const content = document.getElementById('contentEditor').value.trim();
+    const selectedImage = document.getElementById('selectedImage').value;
+    const publishBtn = document.getElementById('publishBtn');
+    const publishBtnMobile = document.getElementById('publishBtnMobile');
+    
+    const canPublish = content.length > 100 && selectedImage;
+    
+    [publishBtn, publishBtnMobile].forEach(btn => {
+        if (btn) {
+            btn.disabled = !canPublish;
+            if (canPublish) {
+                btn.classList.remove('btn-secondary');
+                btn.classList.add('btn-success');
+            } else {
+                btn.classList.remove('btn-success');
+                btn.classList.add('btn-secondary');
+            }
+        }
+    });
+}
+
+// Haberi yayınla
+function publishNews() {
+    const content = document.getElementById('contentEditor').value.trim();
+    const selectedImage = document.getElementById('selectedImage').value;
+    
+    if (!content) {
+        showToast('Haber içeriği boş!', 'warning');
+        return;
+    }
+    
+    if (!selectedImage) {
+        showToast('Kapak fotoğrafı seçmek zorunludur!', 'warning');
+        return;
+    }
+    
+    // Onay modal göster
+    const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
+    modal.show();
+}
+
+// Yayını onayla
+async function confirmPublish() {
+    const modal = bootstrap.Modal.getInstance(document.getElementById('confirmModal'));
+    modal.hide();
+    
+    const publishBtn = document.getElementById('publishBtn');
+    const publishBtnMobile = document.getElementById('publishBtnMobile');
+    const originalText = publishBtn ? publishBtn.innerHTML : '';
+    const originalMobileText = publishBtnMobile ? publishBtnMobile.innerHTML : '';
+    
+    try {
+        [publishBtn, publishBtnMobile].forEach(btn => {
+            if (btn) {
+                setLoading(btn);
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Yayınlanıyor...';
+            }
+        });
+        
+        updateStatus('Haber yayınlanıyor...');
+        
+        // Başlığı içerikten çıkar
+        const content = document.getElementById('contentEditor').value;
+        const titleMatch = content.match(/<h1>(.*?)<\/h1>/);
+        const title = titleMatch ? titleMatch[1] : 'Haber Başlığı';
+        
+        // Etiketleri al
+        const tagsText = document.getElementById('tagsInput').value;
+        const tags = tagsText.split(',').map(tag => tag.trim()).filter(tag => tag);
+        
+        const data = {
+            baslik: title,
+            icerik: content,
+            etiketler: tags,
+            kategori_id: parseInt(document.getElementById('categorySelect').value) || null,
+            resim_dosyasi: document.getElementById('selectedImage').value
+        };
+        
+        const response = await fetch('/api/haberi-yayinla', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast('Haber başarıyla yayınlandı! 🎉', 'success');
+            updateStatus('Haber başarıyla yayınlandı');
+            
+            // Başarı animasyonu
+            [publishBtn, publishBtnMobile].forEach(btn => {
+                if (btn) {
+                    btn.innerHTML = '<i class="fas fa-check me-2"></i>Yayınlandı!';
+                    btn.classList.remove('btn-success');
+                    btn.classList.add('btn-outline-success');
+                }
+            });
+            
+            // Link göster
+            if (result.link) {
+                setTimeout(() => {
+                    const linkModal = document.createElement('div');
+                    linkModal.innerHTML = `
+                        <div class="modal fade" id="linkModal" tabindex="-1">
+                            <div class="modal-dialog">
+                                <div class="modal-content">
+                                    <div class="modal-header bg-success text-white">
+                                        <h5 class="modal-title">
+                                            <i class="fas fa-check-circle me-2"></i>Yayın Başarılı!
+                                        </h5>
+                                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                                    </div>
+                                    <div class="modal-body text-center">
+                                        <i class="fas fa-rocket fa-4x text-success mb-3"></i>
+                                        <h4 class="text-success mb-3">Haberiniz Yayınlandı!</h4>
+                                        <div class="alert alert-info">
+                                            <strong>Yayın Linki:</strong><br>
+                                            <a href="${result.link}" target="_blank" class="text-break small">
+                                                ${result.link}
+                                            </a>
+                                        </div>
+                                    </div>
+                                    <div class="modal-footer">
+                                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                                            <i class="fas fa-times me-2"></i>Kapat
+                                        </button>
+                                        <a href="${result.link}" target="_blank" class="btn btn-success">
+                                            <i class="fas fa-external-link-alt me-2"></i>Haberi Görüntüle
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    document.body.appendChild(linkModal);
+                    const modal = new bootstrap.Modal(document.getElementById('linkModal'));
+                    modal.show();
+                }, 1500);
+            }
+        } else {
+            showToast('Yayın hatası: ' + result.error, 'danger');
+            updateStatus('Yayın hatası');
+        }
+    } catch (error) {
+        showToast('Bağlantı hatası: ' + error.message, 'danger');
+        updateStatus('Bağlantı hatası');
+    } finally {
+        setTimeout(() => {
+            [publishBtn, publishBtnMobile].forEach(btn => {
+                if (btn) {
+                    setLoading(btn, false);
+                    btn.innerHTML = originalText || originalMobileText;
+                }
+            });
+        }, 2000);
+    }
+}
+
+// Mobil optimizasyonlar
+document.addEventListener('DOMContentLoaded', function() {
+    // Viewport ayarı
+    const viewport = document.querySelector('meta[name="viewport"]');
+    if (!viewport) {
+        const meta = document.createElement('meta');
+        meta.name = 'viewport';
+        meta.content = 'width=device-width, initial-scale=1.0, user-scalable=no';
+        document.head.appendChild(meta);
+    }
+    
+    // Touch feedback
+    const buttons = document.querySelectorAll('.btn');
+    buttons.forEach(button => {
+        button.addEventListener('touchstart', function() {
+            this.style.transform = 'scale(0.95)';
+        });
+        
+        button.addEventListener('touchend', function() {
+            this.style.transform = 'scale(1)';
+        });
+    });
+});
+</script>
+{% endblock %}
