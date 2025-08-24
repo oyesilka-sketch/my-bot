@@ -408,6 +408,33 @@ class HaberYoneticisi:
         except Exception as e:
             print(f"URL çıkarma hatası: {e}")
             return None
+
+    def haber_guncelle(self, haber_id, yeni_baslik=None, yeni_aciklama=None):
+        """Haber bilgilerini güncelle"""
+        try:
+            # Ana haber listesinde bul ve güncelle
+            for haber in self.haberler:
+                if haber.get('id') == haber_id:
+                    if yeni_baslik:
+                        haber['baslik'] = yeni_baslik
+                    if yeni_aciklama:
+                        haber['description'] = yeni_aciklama
+                    return True
+            
+            # Link haberlerinde bul ve güncelle
+            for haber in self.link_haberleri:
+                if haber.get('id') == haber_id:
+                    if yeni_baslik:
+                        haber['baslik'] = yeni_baslik
+                    if yeni_aciklama:
+                        haber['description'] = yeni_aciklama
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"Haber güncelleme hatası: {e}")
+            return False
         """Haber bilgilerini güncelle"""
         try:
             # Ana haber listesinde bul ve güncelle
