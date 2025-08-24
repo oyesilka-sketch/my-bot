@@ -86,13 +86,13 @@
                                     <strong>Link'ten Haber Çek</strong>
                                 </div>
                                 <div class="input-group">
-                                    <input type="url" id="linkInput" class="form-control" 
-                                           placeholder="Haber linkini buraya yapıştırın (örn: https://www.sondakika.com/haber/...)">
+                                    <input type="text" id="linkInput" class="form-control" 
+                                           placeholder="Haber metni ve linkini buraya yapıştırın (URL otomatik çıkarılacak)">
                                     <button class="btn btn-light" type="button" id="linkFetchBtn">
                                         <span id="linkBtnText">📥 Haberi Çek</span>
                                     </button>
                                 </div>
-                                <small class="text-light">Sondakika.com ve diğer haber sitelerinden otomatik haber çekimi</small>
+                                <small class="text-light">Örnek: "TCG Anadolu haberi: https://www.sondakika.com/..." - URL otomatik çıkarılır</small>
                             </div>
                             <div class="col-md-3 text-center">
                                 <button id="refreshAllBtn" class="btn btn-outline-light btn-sm w-100">
@@ -274,15 +274,10 @@
         // Link'ten haber çek
         function fetchNewsFromLink() {
             const linkInput = document.getElementById('linkInput');
-            const url = linkInput.value.trim();
+            const girdi = linkInput.value.trim();
 
-            if (!url) {
-                showError('Lütfen geçerli bir URL girin!');
-                return;
-            }
-
-            if (!isValidUrl(url)) {
-                showError('Lütfen geçerli bir URL formatı girin!');
+            if (!girdi) {
+                showError('Lütfen metin veya URL girin!');
                 return;
             }
 
@@ -300,7 +295,7 @@
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ url: url })
+                body: JSON.stringify({ url: girdi })
             })
             .then(response => response.json())
             .then(data => {
