@@ -15,19 +15,12 @@ import threading
 from pathlib import Path
 from werkzeug.utils import secure_filename
 import uuid
-from pyngrok import ngrok, conf
-import atexit
-import signal
-import sys
+from urllib.parse import urljoin, urlparse
+import hashlib
 
 app = Flask(__name__)
 app.secret_key = 'haber_yonetim_secret_key_2024'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
-app.config['UPLOAD_FOLDER'] = 'static/images'
-
-# Ngrok yapılandırması
-NGROK_AUTH_TOKEN = '31VLc3RYqaikIfktxsWr9fwU9jD_66ZiQCgTiyXaQWXFKSDbc'
-NGROK_TUNNEL = None
 
 # İzin verilen dosya türleri
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
@@ -35,75 +28,12 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def setup_ngrok():
-    """Ngrok kurulumu ve başlatma"""
-    global NGROK_TUNNEL, NGROK_AUTH_TOKEN
-    
-    try:
-        # Config'den ngrok token'ı al
-        if os.path.exists('config.json'):
-            with open('config.json', 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                NGROK_AUTH_TOKEN = config.get('ngrok', {}).get('auth_token')
-        
-        if NGROK_AUTH_TOKEN:
-            # Ngrok auth token'ı set et
-            conf.get_default().auth_token = NGROK_AUTH_TOKEN
-            print("Ngrok auth token set edildi.")
-        else:
-            print("Uyarı: Ngrok auth token bulunamadı. Free tier sınırlamaları geçerli olacak.")
-        
-        # Mevcut tunnel'ları kapat
-        ngrok.kill()
-        
-        # Yeni tunnel başlat
-        NGROK_TUNNEL = ngrok.connect(5000, bind_tls=True)
-        ngrok_url = NGROK_TUNNEL.public_url
-        
-        print("\n" + "="*60)
-        print("🌐 NGROK TUNNEL AKTİF")
-        print("="*60)
-        print(f"Local URL: http://localhost:5000")
-        print(f"Public URL: {ngrok_url}")
-        print(f"iPhone/Mobil URL: {ngrok_url}")
-        print("="*60)
-        print("📱 iPhone'dan bu URL'i Safari'de açın!")
-        print("⚠️  Güvenlik: Bu URL'i kimseyle paylaşmayın")
-        print("="*60 + "\n")
-        
-        return ngrok_url
-        
-    except Exception as e:
-        print(f"Ngrok kurulum hatası: {e}")
-        print("Ngrok olmadan local modda çalışacak...")
-        return None
-
-def cleanup_ngrok():
-    """Ngrok temizleme"""
-    try:
-        if NGROK_TUNNEL:
-            ngrok.disconnect(NGROK_TUNNEL.public_url)
-        ngrok.kill()
-        print("Ngrok tunnel kapatıldı.")
-    except:
-        pass
-
-def signal_handler(sig, frame):
-    """Çıkış sinyali yakalama"""
-    print("\nUygulama kapatılıyor...")
-    cleanup_ngrok()
-    sys.exit(0)
-
-# Çıkış işleyicilerini kaydet
-atexit.register(cleanup_ngrok)
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-
 class HaberYoneticisi:
     def __init__(self):
         self.load_config()
         self.haberler = []
         self.secili_haber = None
+        self.link_haberleri = []  # Link'ten çekilen haberler için ayrı liste
         
     def load_config(self):
         """Konfigürasyon yükleme"""
@@ -121,24 +51,445 @@ class HaberYoneticisi:
             self.GOOGLE_AI_KEY = self.config['google_ai']['api_key']
             genai.configure(api_key=self.GOOGLE_AI_KEY)
             
-            # KLASÖR UYUMLULUĞU İÇİN DÜZELTME
-            # Flask app.config ile aynı klasörü kullan
-            self.IMAGE_FOLDER = app.config['UPLOAD_FOLDER']  # 'static/images' kullan
+            # Diğer ayarlar
+            self.IMAGE_FOLDER = self.config['settings']['image_folder']
+            self.ONCEKI_HABERLER_FILE = self.config['settings']['onceki_haberler_file']
+            self.ONCEKI_GUNCEL_HABERLER_FILE = self.config['settings']['onceki_guncel_haberler_file']
             
-            print(f"DEBUG CONFIG: IMAGE_FOLDER ayarlandı: {self.IMAGE_FOLDER}")
-            print(f"DEBUG CONFIG: Flask UPLOAD_FOLDER: {app.config['UPLOAD_FOLDER']}")
-            
-            # Config dosyasındaki diğer ayarlar
-            config_settings = self.config.get('settings', {})
-            self.ONCEKI_HABERLER_FILE = config_settings.get('onceki_haberler_file', 'data/onceki_istanbul_haberler.json')
-            self.ONCEKI_GUNCEL_HABERLER_FILE = config_settings.get('onceki_guncel_haberler_file', 'data/onceki_guncel_haberler.json')
+            # Flask upload folder'ını da aynı klasöre ayarla
+            app.config['UPLOAD_FOLDER'] = self.IMAGE_FOLDER
             
         except Exception as e:
             print(f"Config yükleme hatası: {e}")
-            # Fallback values
-            self.IMAGE_FOLDER = app.config['UPLOAD_FOLDER']
-            self.ONCEKI_HABERLER_FILE = 'data/onceki_istanbul_haberler.json'
-            self.ONCEKI_GUNCEL_HABERLER_FILE = 'data/onceki_guncel_haberler.json'
+            # Fallback değerler
+            self.IMAGE_FOLDER = 'static/images'
+            app.config['UPLOAD_FOLDER'] = self.IMAGE_FOLDER
+
+    def link_haber_cek(self, url):
+        """Verilen linkten haber içeriğini çek - Geliştirilmiş versiyon"""
+        try:
+            # URL doğrulama
+            parsed_url = urlparse(url)
+            if not parsed_url.scheme:
+                url = 'https://' + url
+            
+            domain = parsed_url.netloc.lower()
+            
+            # Sondakika.com için özel işlem
+            if 'sondakika.com' in domain:
+                return self._sondakika_haber_cek(url)
+            
+            # Diğer siteler için genel işlem
+            return self._genel_haber_cek(url)
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Haber çekme hatası: {str(e)}'}
+    
+    def _sondakika_haber_cek(self, url):
+        """Sondakika.com için özel haber çekici"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'DNT': '1'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
+            response.raise_for_status()
+            
+            # Encoding düzelt
+            if response.encoding in ['ISO-8859-1', None] or response.apparent_encoding:
+                response.encoding = response.apparent_encoding or 'utf-8'
+            
+            soup = BeautifulSoup(response.text, 'html.parser', from_encoding='utf-8')
+            
+            # Başlık çekme - Sondakika.com için spesifik
+            baslik = ""
+            
+            # Title tag'den al (en güvenilir)
+            title_tag = soup.find('title')
+            if title_tag:
+                baslik = title_tag.get_text().strip()
+                # Site adını temizle
+                if ' - Son Dakika' in baslik:
+                    baslik = baslik.split(' - Son Dakika')[0].strip()
+                elif ' - ' in baslik:
+                    baslik = baslik.split(' - ')[0].strip()
+            
+            # Eğer başlık yoksa h1 dene
+            if not baslik or len(baslik) < 10:
+                h1_tags = soup.find_all('h1')
+                for h1 in h1_tags:
+                    text = h1.get_text().strip()
+                    if text and len(text) > 10:
+                        baslik = text
+                        break
+            
+            # Eğer hala başlık yoksa meta tag dene
+            if not baslik or len(baslik) < 10:
+                meta_title = soup.find('meta', {'property': 'og:title'})
+                if meta_title and meta_title.get('content'):
+                    baslik = meta_title.get('content').strip()
+            
+            # İçerik çekme - Basit metin yaklaşımı
+            icerik = ""
+            
+            # Ana içerik div'lerini bul
+            content_divs = soup.find_all('div', class_=True)
+            for div in content_divs:
+                div_classes = ' '.join(div.get('class', [])).lower()
+                # İçerik olabilecek div'leri kontrol et
+                if any(keyword in div_classes for keyword in ['content', 'detail', 'article', 'news', 'text']):
+                    # Script, style, nav vb. kaldır
+                    for unwanted in div.find_all(['script', 'style', 'nav', 'footer', 'header', 'aside']):
+                        unwanted.decompose()
+                    
+                    text = div.get_text().strip()
+                    if len(text) > len(icerik):
+                        icerik = text
+            
+            # Eğer div'lerden içerik çekilemezse paragrafları kullan
+            if not icerik or len(icerik) < 200:
+                paragraflar = soup.find_all('p')
+                icerik_parcalari = []
+                
+                for p in paragraflar:
+                    text = p.get_text().strip()
+                    # Kısa ve anlamsız metinleri atla
+                    if (len(text) > 30 and 
+                        not text.lower().startswith(('reklam', 'cookie', 'gdpr', 'paylaş', 'takip')) and
+                        'son dakika' not in text.lower()[:20]):  # Başlangıçta "son dakika" varsa atla
+                        icerik_parcalari.append(text)
+                
+                # İlk 20 paragrafı birleştir
+                if icerik_parcalari:
+                    icerik = '\n\n'.join(icerik_parcalari[:20])
+            
+            # Metni temizle
+            if icerik:
+                icerik = re.sub(r'[\r\n\t]+', ' ', icerik)
+                icerik = re.sub(r'\s+', ' ', icerik)
+                icerik = icerik.strip()
+            
+            # Açıklama meta tag'den al
+            aciklama = ""
+            meta_desc = soup.find('meta', {'name': 'description'})
+            if meta_desc and meta_desc.get('content'):
+                aciklama = meta_desc.get('content').strip()
+            
+            # Eğer açıklama yoksa içeriğin başını al
+            if not aciklama and icerik:
+                aciklama = icerik[:200] + "..." if len(icerik) > 200 else icerik
+            
+            # Resim URL'si
+            resim_url = ""
+            meta_image = soup.find('meta', {'property': 'og:image'})
+            if meta_image and meta_image.get('content'):
+                resim_url = urljoin(url, meta_image.get('content'))
+            
+            # URL'den başlık çıkar (fallback)
+            if not baslik or baslik.lower() in ['başlık bulunamadı', 'haber']:
+                if '/haber-' in url:
+                    url_part = url.split('/haber-')[-1].split('/')[0]
+                    # URL'deki kelimeleri düzenle
+                    words = url_part.replace('-ci-', ' ').replace('-', ' ').split()
+                    baslik = ' '.join(word.capitalize() for word in words if len(word) > 2)[:100]
+            
+            # Final kontrol
+            if not baslik:
+                baslik = "Sondakika.com Haberi"
+            
+            if not icerik or len(icerik) < 50:
+                # Son çare: Sayfadaki tüm metni al
+                body_text = soup.get_text()
+                if body_text and len(body_text) > 200:
+                    # Gereksiz kısımları kaldır
+                    lines = body_text.split('\n')
+                    cleaned_lines = []
+                    for line in lines:
+                        line = line.strip()
+                        if (len(line) > 30 and 
+                            not line.lower().startswith(('reklam', 'cookie', 'menü', 'ana sayfa'))):
+                            cleaned_lines.append(line)
+                    
+                    if cleaned_lines:
+                        icerik = '\n'.join(cleaned_lines[:15])
+            
+            if not icerik or len(icerik) < 50:
+                return {'success': False, 'error': 'Bu Sondakika.com haberinden yeterli içerik çekilemedi'}
+            
+            # Sonuç hazırla
+            url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()[:8]
+            
+            haber_data = {
+                'id': url_hash,
+                'baslik': baslik[:200],
+                'haber_metni': icerik[:5000],
+                'description': aciklama[:500] if aciklama else icerik[:200] + "...",
+                'kaynak': 'Link',
+                'durum': 'Yeni',
+                'url': url,
+                'resim_url': resim_url,
+                'tarih': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'kelime_sayisi': len(icerik.split()) if icerik else 0
+            }
+            
+            return {'success': True, 'haber': haber_data}
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Sondakika.com işlem hatası: {str(e)}'}
+    
+    def _genel_haber_cek(self, url):
+        """Diğer siteler için genel haber çekici"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Cache-Control': 'no-cache',
+                'DNT': '1',
+                'Connection': 'keep-alive'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
+            response.raise_for_status()
+            
+            if response.encoding == 'ISO-8859-1' or response.apparent_encoding:
+                response.encoding = response.apparent_encoding or 'utf-8'
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Başlık çekme
+            baslik = ""
+            baslik_selectors = [
+                'h1',
+                'meta[property="og:title"]',
+                'meta[name="twitter:title"]',
+                'title',
+                '.entry-title',
+                '.post-title',
+                '.article-title',
+                '.news-title'
+            ]
+            
+            for selector in baslik_selectors:
+                try:
+                    element = soup.select_one(selector)
+                    if element:
+                        if element.name == 'meta':
+                            baslik = element.get('content', '').strip()
+                        elif element.name == 'title':
+                            baslik_text = element.get_text().strip()
+                            if ' - ' in baslik_text:
+                                baslik = baslik_text.split(' - ')[0].strip()
+                            else:
+                                baslik = baslik_text
+                        else:
+                            baslik = element.get_text().strip()
+                        
+                        if baslik and len(baslik) > 10:
+                            break
+                except:
+                    continue
+            
+            # İçerik çekme
+            icerik = ""
+            icerik_selectors = [
+                'article',
+                '.entry-content',
+                '.post-content',
+                '.article-content',
+                '.news-content',
+                '.content',
+                '.story-body',
+                '.article-body'
+            ]
+            
+            for selector in icerik_selectors:
+                try:
+                    elements = soup.select(selector)
+                    if elements:
+                        en_uzun = ""
+                        for elem in elements:
+                            for script in elem(["script", "style", "nav", "footer", "header"]):
+                                script.decompose()
+                            
+                            metin = elem.get_text().strip()
+                            metin = re.sub(r'[\r\n\t]+', ' ', metin)
+                            metin = re.sub(r'\s+', ' ', metin)
+                            
+                            if len(metin) > len(en_uzun):
+                                en_uzun = metin
+                        
+                        if len(en_uzun) > 200:
+                            icerik = en_uzun
+                            break
+                except:
+                    continue
+            
+            # Paragraflardan içerik
+            if not icerik or len(icerik) < 200:
+                paragraflar = soup.select('p')
+                icerik_parcalari = []
+                
+                for p in paragraflar:
+                    metin = p.get_text().strip()
+                    metin = re.sub(r'[\r\n\t]+', ' ', metin)
+                    metin = re.sub(r'\s+', ' ', metin)
+                    
+                    if len(metin) > 50:
+                        icerik_parcalari.append(metin)
+                
+                if icerik_parcalari:
+                    icerik = '\n\n'.join(icerik_parcalari[:15])
+            
+            # Açıklama
+            aciklama = ""
+            meta_desc = soup.select_one('meta[name="description"]')
+            if meta_desc:
+                aciklama = meta_desc.get('content', '').strip()
+            
+            if not aciklama and icerik:
+                aciklama = icerik[:200] + "..." if len(icerik) > 200 else icerik
+            
+            # Resim
+            resim_url = ""
+            meta_image = soup.select_one('meta[property="og:image"]')
+            if meta_image:
+                resim_url = urljoin(url, meta_image.get('content', ''))
+            
+            # Final kontrol
+            if not baslik:
+                baslik = "Haber Başlığı"
+            
+            if not icerik or len(icerik) < 50:
+                return {'success': False, 'error': 'Bu siteden yeterli içerik çekilemedi'}
+            
+            url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()[:8]
+            
+            haber_data = {
+                'id': url_hash,
+                'baslik': baslik[:200],
+                'haber_metni': icerik[:5000],
+                'description': aciklama[:500] if aciklama else icerik[:200] + "...",
+                'kaynak': 'Link',
+                'durum': 'Yeni',
+                'url': url,
+                'resim_url': resim_url,
+                'tarih': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'kelime_sayisi': len(icerik.split()) if icerik else 0
+            }
+            
+            return {'success': True, 'haber': haber_data}
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Genel haber çekme hatası: {str(e)}'}
+
+    def haber_guncelle(self, haber_id, yeni_baslik=None, yeni_aciklama=None):
+        """Haber bilgilerini güncelle"""
+        try:
+            # Ana haber listesinde bul ve güncelle
+            for haber in self.haberler:
+                if haber.get('id') == haber_id:
+                    if yeni_baslik:
+                        haber['baslik'] = yeni_baslik
+                    if yeni_aciklama:
+                        haber['description'] = yeni_aciklama
+                    return True
+            
+            # Link haberlerinde bul ve güncelle
+            for haber in self.link_haberleri:
+                if haber.get('id') == haber_id:
+                    if yeni_baslik:
+                        haber['baslik'] = yeni_baslik
+                    if yeni_aciklama:
+                        haber['description'] = yeni_aciklama
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"Haber güncelleme hatası: {e}")
+            return False
+
+    def resim_indir_ve_kaydet(self, resim_url, dosya_adi=None):
+        """URL'den resmi indir ve kaydet"""
+        try:
+            if not resim_url:
+                return None
+                
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(resim_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            # Dosya uzantısını belirle
+            content_type = response.headers.get('content-type', '')
+            uzanti = '.jpg'  # default
+            
+            if 'png' in content_type:
+                uzanti = '.png'
+            elif 'gif' in content_type:
+                uzanti = '.gif'
+            elif 'webp' in content_type:
+                uzanti = '.webp'
+            
+            # Dosya adı oluştur
+            if not dosya_adi:
+                dosya_adi = f"link_resim_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            dosya_adi = dosya_adi + uzanti
+            dosya_yolu = os.path.join(self.IMAGE_FOLDER, dosya_adi)
+            
+            # Klasör oluştur
+            os.makedirs(self.IMAGE_FOLDER, exist_ok=True)
+            
+            # Resmi kaydet
+            with open(dosya_yolu, 'wb') as f:
+                f.write(response.content)
+            
+            # Resmi optimize et
+            try:
+                with Image.open(dosya_yolu) as img:
+                    # RGBA'yı RGB'ye çevir
+                    if img.mode in ('RGBA', 'LA', 'P'):
+                        background = Image.new('RGB', img.size, (255, 255, 255))
+                        if img.mode == 'P':
+                            img = img.convert('RGBA')
+                        background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+                        img = background
+                    
+                    # Boyut kontrolü
+                    max_size = (1200, 800)
+                    if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
+                        img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                    
+                    # JPEG olarak kaydet
+                    final_dosya = os.path.splitext(dosya_adi)[0] + '.jpg'
+                    final_yol = os.path.join(self.IMAGE_FOLDER, final_dosya)
+                    
+                    img.save(final_yol, 'JPEG', quality=85, optimize=True)
+                    
+                    # Orijinal dosyayı sil (eğer farklıysa)
+                    if final_yol != dosya_yolu:
+                        os.remove(dosya_yolu)
+                    
+                    return final_dosya
+                    
+            except Exception as e:
+                print(f"Resim optimize hatası: {e}")
+                return dosya_adi
+                
+        except Exception as e:
+            print(f"Resim indirme hatası: {e}")
+            return None
             
     def haberleri_yenile(self):
         """Haberleri yeniden çek"""
@@ -168,6 +519,9 @@ class HaberYoneticisi:
                 haber['durum'] = 'Yeni' if haber in yeni_gelen else 'Eski'
                 haber['id'] = str(uuid.uuid4())[:8]
                 self.haberler.append(haber)
+            
+            # Link haberlerini de ekle
+            self.haberler.extend(self.link_haberleri)
             
             return True, len(yeni_gelen)
             
@@ -281,23 +635,10 @@ class HaberYoneticisi:
     def haberi_yayinla(self, baslik, icerik, etiketler, kategori_id=None, resim_yolu=None):
         """Haberi WordPress'e yayınla"""
         try:
-            print(f"DEBUG: Yayın başlıyor...")
-            print(f"DEBUG: Başlık: {baslik}")
-            print(f"DEBUG: Resim yolu: {resim_yolu}")
-            
             # Kapak fotoğrafı yükle
             kapak_fotografi_id = None
             if resim_yolu and os.path.exists(resim_yolu):
-                print(f"DEBUG: Resim dosyası bulundu: {resim_yolu}")
-                print(f"DEBUG: Dosya boyutu: {os.path.getsize(resim_yolu)} bytes")
                 kapak_fotografi_id = self.wordpress_medya_yukle(resim_yolu)
-                print(f"DEBUG: WordPress medya ID: {kapak_fotografi_id}")
-            else:
-                print(f"DEBUG: Resim dosyası bulunamadı veya yol boş: {resim_yolu}")
-                if resim_yolu:
-                    print(f"DEBUG: Dosya var mı kontrol: {os.path.exists(resim_yolu)}")
-                    if os.path.exists(os.path.dirname(resim_yolu)):
-                        print(f"DEBUG: Klasör içeriği: {os.listdir(os.path.dirname(resim_yolu))}")
             
             # Etiket ID'lerini al
             tag_ids = []
@@ -318,52 +659,24 @@ class HaberYoneticisi:
             
             if kapak_fotografi_id:
                 data['featured_media'] = kapak_fotografi_id
-                print(f"DEBUG: Featured media ID eklendi: {kapak_fotografi_id}")
-            else:
-                print("DEBUG: Kapak fotoğrafı ID'si yok!")
-            
-            print(f"DEBUG: WordPress'e gönderilecek data: {data}")
             
             response = requests.post(f'{self.WORDPRESS_URL}/wp-json/wp/v2/posts', 
                                    auth=self.WP_AUTH, json=data)
             
-            print(f"DEBUG: WordPress response status: {response.status_code}")
-            
             if response.status_code == 201:
                 post_data = response.json()
-                print(f"DEBUG: Post başarıyla oluşturuldu: {post_data.get('id')}")
-                
-                # BAŞARILI YAYINDAN SONRA RESMİ SİL
-                if resim_yolu and os.path.exists(resim_yolu) and kapak_fotografi_id:
-                    try:
-                        os.remove(resim_yolu)
-                        print(f"DEBUG: Resim dosyası silindi: {resim_yolu}")
-                    except Exception as delete_error:
-                        print(f"DEBUG: Resim silme hatası: {delete_error}")
-                        # Silme hatası yayını etkilemez, devam et
-                
                 return {'success': True, 'link': post_data.get('link', 'Link alınamadı')}
             else:
-                print(f"DEBUG: WordPress error response: {response.text}")
-                # Yayın başarısız olursa resmi silme
                 return {'success': False, 'error': f"HTTP {response.status_code}: {response.text}"}
                 
         except Exception as e:
-            print(f"DEBUG: Exception in haberi_yayinla: {str(e)}")
-            # Exception durumunda da resmi silme
             return {'success': False, 'error': str(e)}
             
     def wordpress_medya_yukle(self, dosya_yolu):
         """WordPress'e medya yükle"""
         try:
-            print(f"DEBUG: WordPress medya yükleme başlıyor: {dosya_yolu}")
-            
             if not os.path.exists(dosya_yolu):
-                print(f"DEBUG: Dosya bulunamadı: {dosya_yolu}")
                 return None
-            
-            file_size = os.path.getsize(dosya_yolu)
-            print(f"DEBUG: Dosya boyutu: {file_size} bytes")
             
             mime_types = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', 
                          '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp'}
@@ -372,40 +685,20 @@ class HaberYoneticisi:
             uzanti = os.path.splitext(dosya_adi)[1].lower()
             content_type = mime_types.get(uzanti, 'image/jpeg')
             
-            print(f"DEBUG: Dosya adı: {dosya_adi}")
-            print(f"DEBUG: Uzantı: {uzanti}")
-            print(f"DEBUG: Content type: {content_type}")
-            
             with open(dosya_yolu, 'rb') as f:
-                file_data = f.read()
-                print(f"DEBUG: Dosya okundu, boyut: {len(file_data)} bytes")
-                
                 headers = {
                     'Content-Type': content_type,
                     'Content-Disposition': f'attachment; filename="{dosya_adi}"'
                 }
                 
-                print(f"DEBUG: WordPress medya URL: {self.WORDPRESS_URL}/wp-json/wp/v2/media")
-                print(f"DEBUG: Headers: {headers}")
-                
                 response = requests.post(f'{self.WORDPRESS_URL}/wp-json/wp/v2/media', 
-                                       auth=self.WP_AUTH, headers=headers, data=file_data)
-                
-                print(f"DEBUG: WordPress medya response status: {response.status_code}")
+                                       auth=self.WP_AUTH, headers=headers, data=f.read())
                 
                 if response.status_code == 201:
-                    response_data = response.json()
-                    media_id = response_data.get('id')
-                    print(f"DEBUG: WordPress medya başarıyla yüklendi, ID: {media_id}")
-                    print(f"DEBUG: Medya URL: {response_data.get('source_url', 'N/A')}")
-                    return media_id
-                else:
-                    print(f"DEBUG: WordPress medya yükleme hatası: {response.status_code}")
-                    print(f"DEBUG: Error response: {response.text}")
-                    return None
+                    return response.json().get('id')
+            return None
             
-        except Exception as e:
-            print(f"DEBUG: WordPress medya yükleme exception: {str(e)}")
+        except:
             return None
             
     def etiket_olustur_veya_bul(self, etiket_adi):
@@ -430,48 +723,6 @@ class HaberYoneticisi:
             return None
         except:
             return None
-    
-    def eski_resimleri_temizle(self, max_yas_saat=24):
-        """Eski yüklenen resimleri temizle (varsayılan: 24 saat)"""
-        try:
-            if not os.path.exists(self.IMAGE_FOLDER):
-                print("DEBUG CLEANUP: Image folder bulunamadı")
-                return
-            
-            import time
-            from datetime import datetime, timedelta
-            
-            simdiki_zaman = time.time()
-            max_yas_saniye = max_yas_saat * 3600
-            silinen_dosyalar = []
-            
-            print(f"DEBUG CLEANUP: {max_yas_saat} saatten eski dosyalar temizleniyor...")
-            
-            for dosya in os.listdir(self.IMAGE_FOLDER):
-                dosya_yolu = os.path.join(self.IMAGE_FOLDER, dosya)
-                
-                if os.path.isfile(dosya_yolu):
-                    dosya_zamani = os.path.getmtime(dosya_yolu)
-                    dosya_yasi = simdiki_zaman - dosya_zamani
-                    
-                    if dosya_yasi > max_yas_saniye:
-                        try:
-                            os.remove(dosya_yolu)
-                            silinen_dosyalar.append(dosya)
-                            print(f"DEBUG CLEANUP: Eski dosya silindi: {dosya}")
-                        except Exception as e:
-                            print(f"DEBUG CLEANUP: Dosya silme hatası {dosya}: {e}")
-            
-            if silinen_dosyalar:
-                print(f"DEBUG CLEANUP: {len(silinen_dosyalar)} eski dosya temizlendi")
-            else:
-                print("DEBUG CLEANUP: Silinecek eski dosya bulunamadı")
-                
-            return len(silinen_dosyalar)
-            
-        except Exception as e:
-            print(f"DEBUG CLEANUP: Cleanup hatası: {e}")
-            return 0
 
 # Global yönetici instance
 yonetici = HaberYoneticisi()
@@ -488,18 +739,22 @@ def ana_sayfa():
         haberler = [h for h in yonetici.haberler if h.get('kaynak') == 'İstanbul']
     elif filtre == "Güncel":
         haberler = [h for h in yonetici.haberler if h.get('kaynak') == 'Güncel']
+    elif filtre == "Link":
+        haberler = [h for h in yonetici.haberler if h.get('kaynak') == 'Link']
     else:
         haberler = yonetici.haberler
     
     # İstatistikler
     toplam_haber = len(yonetici.haberler)
     yeni_haber = len([h for h in yonetici.haberler if h.get('durum') == 'Yeni'])
+    link_haber = len([h for h in yonetici.haberler if h.get('kaynak') == 'Link'])
     
     return render_template('ana_sayfa.html', 
                          haberler=haberler, 
                          filtre=filtre,
                          toplam_haber=toplam_haber,
-                         yeni_haber=yeni_haber)
+                         yeni_haber=yeni_haber,
+                         link_haber=link_haber)
 
 @app.route('/haber/<haber_id>')
 def haber_detay(haber_id):
@@ -517,17 +772,103 @@ def haber_detay(haber_id):
     # Kategorileri yükle
     kategoriler = yonetici.kategorileri_yukle()
     
-    # Resim dosyalarını listele
+    # Resim dosyalarını listele - app.config['UPLOAD_FOLDER'] kullan
     resim_dosyalari = []
-    if os.path.exists(yonetici.IMAGE_FOLDER):
+    if os.path.exists(app.config['UPLOAD_FOLDER']):
         formatlar = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
-        resim_dosyalari = [f for f in os.listdir(yonetici.IMAGE_FOLDER) 
+        resim_dosyalari = [f for f in os.listdir(app.config['UPLOAD_FOLDER']) 
                           if os.path.splitext(f)[1].lower() in formatlar]
     
     return render_template('haber_detay.html', 
                          haber=haber, 
                          kategoriler=kategoriler,
                          resim_dosyalari=resim_dosyalari)
+
+# ======= API ENDPOINT'LERİ =======
+
+@app.route('/api/link-haber-cek', methods=['POST'])
+def api_link_haber_cek():
+    """API: Link'ten haber çek"""
+    try:
+        data = request.get_json()
+        url = data.get('url', '').strip()
+        
+        if not url:
+            return jsonify({'success': False, 'error': 'URL gerekli'})
+        
+        # Haberi çek
+        sonuc = yonetici.link_haber_cek(url)
+        
+        if sonuc['success']:
+            haber = sonuc['haber']
+            
+            # Resim varsa indir
+            resim_dosyasi = None
+            if haber.get('resim_url'):
+                resim_dosyasi = yonetici.resim_indir_ve_kaydet(
+                    haber['resim_url'], 
+                    f"link_{haber['id']}"
+                )
+                if resim_dosyasi:
+                    haber['resim_dosyasi'] = resim_dosyasi
+            
+            # Link haberlerine ekle
+            # Aynı URL'den daha önce çekilmiş mi kontrol et
+            mevcut_var = False
+            for mevcut_haber in yonetici.link_haberleri:
+                if mevcut_haber.get('url') == url:
+                    # Güncelle
+                    mevcut_haber.update(haber)
+                    mevcut_var = True
+                    break
+            
+            if not mevcut_var:
+                yonetici.link_haberleri.append(haber)
+            
+            # Ana haber listesini güncelle
+            yonetici.haberleri_yenile()
+            
+            return jsonify({
+                'success': True,
+                'haber': haber,
+                'message': 'Haber başarıyla çekildi'
+            })
+        else:
+            return jsonify(sonuc)
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/haber-guncelle', methods=['POST'])
+def api_haber_guncelle():
+    """API: Haber başlık ve açıklamasını güncelle"""
+    try:
+        data = request.get_json()
+        haber_id = data.get('haber_id')
+        yeni_baslik = data.get('baslik', '').strip()
+        yeni_aciklama = data.get('aciklama', '').strip()
+        
+        if not haber_id:
+            return jsonify({'success': False, 'error': 'Haber ID gerekli'})
+        
+        if not yeni_baslik:
+            return jsonify({'success': False, 'error': 'Başlık boş olamaz'})
+        
+        # Haberi güncelle
+        basarili = yonetici.haber_guncelle(haber_id, yeni_baslik, yeni_aciklama)
+        
+        if basarili:
+            return jsonify({
+                'success': True,
+                'message': 'Haber başarıyla güncellendi',
+                'baslik': yeni_baslik,
+                'aciklama': yeni_aciklama
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Haber bulunamadı'})
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/haberleri-yenile', methods=['POST'])
 def api_haberleri_yenile():
@@ -540,7 +881,8 @@ def api_haberleri_yenile():
                 'success': True, 
                 'message': f'Haberler güncellendi. {yeni_sayisi} yeni haber bulundu.',
                 'toplam_haber': len(yonetici.haberler),
-                'yeni_haber': yeni_sayisi
+                'yeni_haber': yeni_sayisi,
+                'link_haber': len([h for h in yonetici.haberler if h.get('kaynak') == 'Link'])
             })
         else:
             return jsonify({'success': False, 'error': 'Haberler güncellenemedi'})
@@ -600,13 +942,6 @@ def api_haberi_yayinla():
         kategori_id = data.get('kategori_id')
         resim_dosyasi = data.get('resim_dosyasi')
         
-        print(f"DEBUG API: Gelen data:")
-        print(f"DEBUG API: Başlık: {baslik}")
-        print(f"DEBUG API: Resim dosyası: {resim_dosyasi}")
-        print(f"DEBUG API: IMAGE_FOLDER: {yonetici.IMAGE_FOLDER}")
-        print(f"DEBUG API: Current working directory: {os.getcwd()}")
-        print(f"DEBUG API: Environment: {os.environ.get('RENDER', 'LOCAL')}")
-        
         if not baslik or not icerik:
             return jsonify({'success': False, 'error': 'Başlık ve içerik gerekli'})
         
@@ -614,80 +949,17 @@ def api_haberi_yayinla():
         if not resim_dosyasi:
             return jsonify({'success': False, 'error': 'Kapak fotoğrafı seçmek zorunludur!'})
         
-        # Render.com kontrol
-        if os.environ.get('RENDER'):
-            print(f"DEBUG API: RENDER ortamında çalışıyor")
-            # Render'da dosya sistemi ephemeral - kontrol et
-            print(f"DEBUG API: Disk kullanımı kontrol ediliyor...")
-            import shutil
-            total, used, free = shutil.disk_usage('.')
-            print(f"DEBUG API: Free space: {free / (1024**2):.2f} MB")
-        
-        # Resim yolunu belirle - BU KISIM ÖNEMLİ
-        resim_yolu = os.path.join(yonetici.IMAGE_FOLDER, resim_dosyasi)
-        print(f"DEBUG API: Oluşturulan resim yolu: {resim_yolu}")
-        print(f"DEBUG API: Mutlak yol: {os.path.abspath(resim_yolu)}")
-        
-        # Klasör varlığını kontrol et
-        if not os.path.exists(yonetici.IMAGE_FOLDER):
-            print(f"DEBUG API: IMAGE_FOLDER mevcut değil, oluşturuluyor: {yonetici.IMAGE_FOLDER}")
-            os.makedirs(yonetici.IMAGE_FOLDER, exist_ok=True)
-        
-        # Klasör içeriğini listele
-        if os.path.exists(yonetici.IMAGE_FOLDER):
-            folder_contents = os.listdir(yonetici.IMAGE_FOLDER)
-            print(f"DEBUG API: IMAGE_FOLDER içeriği: {folder_contents}")
-            print(f"DEBUG API: Klasör içinde {len(folder_contents)} dosya var")
-            
-            # Dosya adı eşleşmesi kontrol et
-            matching_files = [f for f in folder_contents if resim_dosyasi in f or f in resim_dosyasi]
-            print(f"DEBUG API: Eşleşen dosyalar: {matching_files}")
+        # Resim yolunu belirle - app.config['UPLOAD_FOLDER'] kullan
+        resim_yolu = os.path.join(app.config['UPLOAD_FOLDER'], resim_dosyasi)
         
         if not os.path.exists(resim_yolu):
-            print(f"DEBUG API: Resim dosyası bulunamadı!")
-            print(f"DEBUG API: Aranan yol: {resim_yolu}")
-            
-            # Render.com özel kontrolü
-            if os.environ.get('RENDER'):
-                print(f"DEBUG API: RENDER.COM UYARISI - Ephemeral file system!")
-                print(f"DEBUG API: Dosyalar sunucu restart'ında silinir!")
-                
-                # Alternatif çözüm: Dosya adını bulma
-                if os.path.exists(yonetici.IMAGE_FOLDER):
-                    all_files = os.listdir(yonetici.IMAGE_FOLDER)
-                    # Timestamp kısmını çıkararak eşleşme ara
-                    base_name = resim_dosyasi.split('_', 2)[-1] if '_' in resim_dosyasi else resim_dosyasi
-                    for file in all_files:
-                        if base_name in file or file.endswith(base_name):
-                            alternative_path = os.path.join(yonetici.IMAGE_FOLDER, file)
-                            print(f"DEBUG API: Alternatif dosya bulundu: {file}")
-                            resim_yolu = alternative_path
-                            break
-            
-            if not os.path.exists(resim_yolu):
-                return jsonify({
-                    'success': False, 
-                    'error': f'Fotoğraf bulunamadı! Render.com ephemeral storage sorunu olabilir. Dosyayı yeniden yükleyin.',
-                    'debug_info': {
-                        'aranan_dosya': resim_dosyasi,
-                        'aranan_yol': resim_yolu,
-                        'mevcut_dosyalar': folder_contents if 'folder_contents' in locals() else [],
-                        'render_ortami': bool(os.environ.get('RENDER'))
-                    }
-                })
-        
-        print(f"DEBUG API: Resim dosyası bulundu, boyut: {os.path.getsize(resim_yolu)} bytes")
+            return jsonify({'success': False, 'error': 'Seçilen fotoğraf bulunamadı!'})
         
         # Yayınla
         sonuc = yonetici.haberi_yayinla(baslik, icerik, etiketler, kategori_id, resim_yolu)
-        
-        print(f"DEBUG API: Yayın sonucu: {sonuc}")
         return jsonify(sonuc)
         
     except Exception as e:
-        print(f"DEBUG API: Exception: {str(e)}")
-        import traceback
-        print(f"DEBUG API: Traceback: {traceback.format_exc()}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/static/images/<filename>')
@@ -697,13 +969,8 @@ def uploaded_file(filename):
 
 @app.route('/api/fotograf-yukle', methods=['POST'])
 def api_fotograf_yukle():
-    """API: Fotoğraf yükle - Render.com uyumlu"""
+    """API: Fotoğraf yükle"""
     try:
-        print(f"DEBUG UPLOAD: Fotoğraf yükleme başlıyor...")
-        print(f"DEBUG UPLOAD: Flask UPLOAD_FOLDER: {app.config['UPLOAD_FOLDER']}")
-        print(f"DEBUG UPLOAD: Yönetici IMAGE_FOLDER: {yonetici.IMAGE_FOLDER}")
-        print(f"DEBUG UPLOAD: Render ortamı: {bool(os.environ.get('RENDER'))}")
-        
         if 'file' not in request.files:
             return jsonify({'success': False, 'error': 'Dosya seçilmedi'})
         
@@ -712,94 +979,23 @@ def api_fotograf_yukle():
         if file.filename == '':
             return jsonify({'success': False, 'error': 'Dosya seçilmedi'})
         
-        print(f"DEBUG UPLOAD: Gelen dosya: {file.filename}")
-        print(f"DEBUG UPLOAD: Dosya boyutu: {len(file.read())} bytes")
-        file.seek(0)  # Dosya pointer'ını başa al
-        
         if file and allowed_file(file.filename):
-            # Render.com için özel dosya adı stratejisi
-            original_filename = secure_filename(file.filename)
+            # Güvenli dosya adı oluştur
+            filename = secure_filename(file.filename)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
+            filename = timestamp + filename
             
-            if os.environ.get('RENDER'):
-                # Render.com'da çok kısa ve basit dosya adı kullan
-                timestamp = datetime.now().strftime('%H%M%S')  # Sadece saat-dakika-saniye
-                random_suffix = str(random.randint(100, 999))
-                extension = os.path.splitext(original_filename)[1].lower()
-                filename = f"img_{timestamp}_{random_suffix}{extension}"
-            else:
-                # Local'de normal timestamp
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
-                filename = timestamp + original_filename
-            
-            print(f"DEBUG UPLOAD: Yeni dosya adı: {filename}")
-            
-            # TEK KLASÖR KULLAN - TUTARLILIK İÇİN
-            upload_folder = app.config['UPLOAD_FOLDER']  # Her zaman aynı klasör
-            print(f"DEBUG UPLOAD: Kullanılacak klasör: {upload_folder}")
-            
-            # Klasörü kesinlikle oluştur
-            os.makedirs(upload_folder, exist_ok=True)
-            print(f"DEBUG UPLOAD: Klasör oluşturuldu/var: {upload_folder}")
-            
-            # Render.com için disk kontrolü
-            if os.environ.get('RENDER'):
-                import shutil
-                total, used, free = shutil.disk_usage('.')
-                free_mb = free / (1024**2)
-                print(f"DEBUG UPLOAD: Render disk - Free: {free_mb:.2f} MB")
-                
-                if free_mb < 50:  # 50MB'dan az boş yer
-                    print(f"DEBUG UPLOAD: Düşük disk alanı, eski dosyalar temizleniyor...")
-                    # Render'da eski dosyaları temizle
-                    try:
-                        for old_file in os.listdir(upload_folder):
-                            if old_file.startswith('img_'):  # Sadece yüklenen resimleri sil
-                                old_path = os.path.join(upload_folder, old_file)
-                                os.remove(old_path)
-                                print(f"DEBUG UPLOAD: Eski dosya silindi: {old_file}")
-                    except Exception as cleanup_error:
-                        print(f"DEBUG UPLOAD: Cleanup hatası: {cleanup_error}")
+            # Klasör oluştur
+            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
             
             # Dosyayı kaydet
-            filepath = os.path.join(upload_folder, filename)
-            print(f"DEBUG UPLOAD: Dosya kaydedilecek yol: {filepath}")
-            print(f"DEBUG UPLOAD: Mutlak yol: {os.path.abspath(filepath)}")
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(filepath)
             
-            try:
-                file.save(filepath)
-                print(f"DEBUG UPLOAD: Dosya başarıyla kaydedildi")
-                
-                # Hemen dosya varlığını kontrol et
-                if not os.path.exists(filepath):
-                    raise Exception(f"Dosya kaydedildi ama hemen bulunamadı: {filepath}")
-                
-                file_size = os.path.getsize(filepath)
-                print(f"DEBUG UPLOAD: Kaydedilen dosya boyutu: {file_size} bytes")
-                
-                # Klasör içeriğini kontrol et
-                folder_contents = os.listdir(upload_folder)
-                print(f"DEBUG UPLOAD: Klasör içeriği: {folder_contents}")
-                print(f"DEBUG UPLOAD: Yeni dosya listede var mı: {filename in folder_contents}")
-                
-            except Exception as save_error:
-                print(f"DEBUG UPLOAD: Dosya kaydetme hatası: {save_error}")
-                return jsonify({'success': False, 'error': f'Dosya kaydetme hatası: {save_error}'})
-            
-            # Resmi optimize et - Render.com için hızlı
+            # Resmi optimize et
             try:
                 with Image.open(filepath) as img:
-                    print(f"DEBUG UPLOAD: Orijinal boyut: {img.size}")
-                    
-                    # Render.com için agresif optimizasyon
-                    if os.environ.get('RENDER'):
-                        # Daha küçük boyut ve daha düşük kalite
-                        max_size = (800, 600)  # Daha küçük
-                        quality = 70  # Daha düşük kalite
-                    else:
-                        max_size = (1200, 800)
-                        quality = 85
-                    
-                    # Mode conversion
+                    # RGBA'yı RGB'ye çevir (JPEG için)
                     if img.mode in ('RGBA', 'LA', 'P'):
                         background = Image.new('RGB', img.size, (255, 255, 255))
                         if img.mode == 'P':
@@ -807,158 +1003,38 @@ def api_fotograf_yukle():
                         background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
                         img = background
                     
-                    # Resize
+                    # Boyutları kontrol et ve küçült
+                    max_size = (1200, 800)
                     if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
                         img.thumbnail(max_size, Image.Resampling.LANCZOS)
-                        print(f"DEBUG UPLOAD: Boyut küçültüldü: {img.size}")
                     
                     # JPEG olarak kaydet
                     if not filename.lower().endswith('.jpg'):
                         filename = os.path.splitext(filename)[0] + '.jpg'
-                        filepath = os.path.join(upload_folder, filename)
+                        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                     
-                    img.save(filepath, 'JPEG', quality=quality, optimize=True)
-                    print(f"DEBUG UPLOAD: JPEG olarak optimize edildi, kalite: {quality}")
+                    img.save(filepath, 'JPEG', quality=85, optimize=True)
                     
             except Exception as e:
-                print(f"DEBUG UPLOAD: Resim optimize hatası: {e}")
-                # Optimize başarısız olsa da devam et
+                print(f"Resim optimize hatası: {e}")
             
-            # Final kontroller
-            if os.path.exists(filepath):
-                final_size = os.path.getsize(filepath)
-                print(f"DEBUG UPLOAD: Final dosya boyutu: {final_size} bytes")
-                
-                # Final klasör kontrolü
-                final_folder_contents = os.listdir(upload_folder)
-                print(f"DEBUG UPLOAD: Final klasör içeriği: {final_folder_contents}")
-                
-                # Render.com için ek kontrol - dosyayı hemen test et
-                if os.environ.get('RENDER'):
-                    try:
-                        with open(filepath, 'rb') as test_file:
-                            test_data = test_file.read(100)  # İlk 100 byte'ı oku
-                            print(f"DEBUG UPLOAD: Dosya erişim testi başarılı: {len(test_data)} bytes okundu")
-                    except Exception as read_error:
-                        print(f"DEBUG UPLOAD: Dosya erişim testi başarısız: {read_error}")
-                        return jsonify({'success': False, 'error': f'Dosya erişim sorunu: {read_error}'})
-                
-                return jsonify({
-                    'success': True, 
-                    'filename': filename,
-                    'url': f'/static/images/{filename}',
-                    'render_mode': bool(os.environ.get('RENDER')),
-                    'file_size': final_size,
-                    'upload_folder': upload_folder
-                })
-            else:
-                print(f"DEBUG UPLOAD: Final dosya bulunamadı: {filepath}")
-                return jsonify({'success': False, 'error': 'Dosya işleme sonrası bulunamadı'})
+            return jsonify({
+                'success': True, 
+                'filename': filename,
+                'url': f'/static/images/{filename}'
+            })
         
         return jsonify({'success': False, 'error': 'Geçersiz dosya türü'})
-        
-    except Exception as e:
-        print(f"DEBUG UPLOAD: Exception: {str(e)}")
-        import traceback
-        print(f"DEBUG UPLOAD: Traceback: {traceback.format_exc()}")
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/eski-resimleri-temizle', methods=['POST'])
-def api_eski_resimleri_temizle():
-    """API: Eski resimleri temizle"""
-    try:
-        data = request.get_json() or {}
-        max_yas_saat = data.get('max_yas_saat', 24)  # Varsayılan 24 saat
-        
-        silinen_sayisi = yonetici.eski_resimleri_temizle(max_yas_saat)
-        
-        return jsonify({
-            'success': True,
-            'message': f'{silinen_sayisi} eski dosya temizlendi',
-            'silinen_sayisi': silinen_sayisi
-        })
-        
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/sunucu-bilgileri', methods=['GET'])
-def api_sunucu_bilgileri():
-    """API: Sunucu ve depolama bilgileri"""
-    try:
-        import shutil
-        
-        # Disk kullanımı
-        total, used, free = shutil.disk_usage('.')
-        
-        # Image folder bilgileri
-        image_count = 0
-        total_image_size = 0
-        
-        if os.path.exists(yonetici.IMAGE_FOLDER):
-            for dosya in os.listdir(yonetici.IMAGE_FOLDER):
-                dosya_yolu = os.path.join(yonetici.IMAGE_FOLDER, dosya)
-                if os.path.isfile(dosya_yolu):
-                    image_count += 1
-                    total_image_size += os.path.getsize(dosya_yolu)
-        
-        return jsonify({
-            'disk_kullanimi': {
-                'toplam_gb': round(total / (1024**3), 2),
-                'kullanilan_gb': round(used / (1024**3), 2),
-                'bos_gb': round(free / (1024**3), 2),
-                'kullanim_yuzdesi': round((used / total) * 100, 1)
-            },
-            'resim_depolama': {
-                'resim_sayisi': image_count,
-                'toplam_boyut_mb': round(total_image_size / (1024**2), 2),
-                'klasor_yolu': yonetici.IMAGE_FOLDER
-            },
-            'haber_istatistikleri': {
-                'toplam_haber': len(yonetici.haberler),
-                'yeni_haber': len([h for h in yonetici.haberler if h.get('durum') == 'Yeni'])
-            }
-        })
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
-    # Upload klasörünü oluştur
-    os.makedirs('static/uploads', exist_ok=True)
-    os.makedirs('static/images', exist_ok=True)
+    # Upload klasörünü oluştur - config yüklendikten sonra
+    if hasattr(yonetici, 'IMAGE_FOLDER'):
+        os.makedirs(yonetici.IMAGE_FOLDER, exist_ok=True)
+    else:
+        os.makedirs('static/images', exist_ok=True)
     
-    print("İstanbul Son Dakika - Haber Yönetim Sistemi")
-    print("=" * 50)
-    
-    # Ngrok tunnel'ını başlat
-    public_url = setup_ngrok()
-    
-    try:
-        # Flask uygulamasını başlat
-        if public_url:
-            print("Flask sunucusu ngrok ile başlatılıyor...")
-        else:
-            print("Flask sunucusu local modda başlatılıyor...")
-            
-        app.run(
-            debug=False,  # Ngrok ile debug=False öneriliyor
-            host='0.0.0.0', 
-            port=5000,
-            threaded=True,
-            use_reloader=False  # Ngrok ile reloader kapalı
-        )
-        
-    except KeyboardInterrupt:
-        print("\nUygulama durduruldu.")
-    except Exception as e:
-        print(f"Sunucu hatası: {e}")
-    finally:
-        cleanup_ngrok()
-
-import os
-
-if _name_ == "_main_":
-    os.makedirs('static/uploads', exist_ok=True)
-    
-    port = int(os.environ.get("PORT", 5000))  # Render'ın verdiği PORT'u al
-    app.run(host="0.0.0.0", port=port)
+    # Debug mode'da çalıştır
+    app.run(debug=True, host='0.0.0.0', port=5000)
