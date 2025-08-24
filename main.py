@@ -390,7 +390,24 @@ class HaberYoneticisi:
         except Exception as e:
             return {'success': False, 'error': f'Genel haber çekme hatası: {str(e)}'}
 
-    def haber_guncelle(self, haber_id, yeni_baslik=None, yeni_aciklama=None):
+    def url_cikart(self, metin):
+        """Metinden URL'yi çıkart"""
+        try:
+            # URL pattern'i
+            url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+            
+            # URL'yi bul
+            urls = re.findall(url_pattern, metin)
+            
+            if urls:
+                # İlk bulduğu URL'yi döndür
+                return urls[0].strip()
+            
+            return None
+            
+        except Exception as e:
+            print(f"URL çıkarma hatası: {e}")
+            return None
         """Haber bilgilerini güncelle"""
         try:
             # Ana haber listesinde bul ve güncelle
@@ -548,11 +565,14 @@ class HaberYoneticisi:
             - Paragraflar arası geçişler doğal olsun
             - Özgün içerik üret, kopyala-yapıştır yapma
             - HTML formatında döndür
+            - MAKSIMUM 4 adet SEO uyumlu etiket oluştur
+            - Çarpıcı ve SEO uyumlu bir açıklama (meta description) yaz (150-160 karakter)
 
             SADECE JSON formatında döndür:
             {{
               "icerik": "HTML içeriği - h1 başlık, içindekiler, h2 alt başlıklar ve paragraflar",
-              "etiketler": ["8-12 adet SEO uyumlu etiket"],
+              "etiketler": ["maksimum 4 adet SEO uyumlu etiket"],
+              "aciklama": "150-160 karakter arası çarpıcı SEO açıklaması",
               "kelime_sayisi": kelime_sayısı
             }}
 
@@ -581,7 +601,8 @@ class HaberYoneticisi:
             return {
                 'success': True,
                 'icerik': ai_data.get('icerik', ''),
-                'etiketler': ai_data.get('etiketler', []),
+                'etiketler': ai_data.get('etiketler', [])[:4],  # Maksimum 4 etiket
+                'aciklama': ai_data.get('aciklama', ''),
                 'kelime_sayisi': ai_data.get('kelime_sayisi', 0)
             }
             
@@ -791,10 +812,20 @@ def api_link_haber_cek():
     """API: Link'ten haber çek"""
     try:
         data = request.get_json()
-        url = data.get('url', '').strip()
+        girdi = data.get('url', '').strip()
+        
+        if not girdi:
+            return jsonify({'success': False, 'error': 'URL gerekli'})
+        
+        # Metinden URL çıkart
+        url = yonetici.url_cikart(girdi)
         
         if not url:
-            return jsonify({'success': False, 'error': 'URL gerekli'})
+            # Eğer URL çıkarılamadıysa, girdinin kendisinin URL olup olmadığını kontrol et
+            if girdi.startswith('http'):
+                url = girdi
+            else:
+                return jsonify({'success': False, 'error': 'Geçerli bir URL bulunamadı. URL https:// ile başlamalıdır.'})
         
         # Haberi çek
         sonuc = yonetici.link_haber_cek(url)
