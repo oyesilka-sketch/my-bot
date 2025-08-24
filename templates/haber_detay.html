@@ -442,10 +442,31 @@
                     quill.root.innerHTML = data.icerik;
                     updateWordCount();
                     
-                    // Etiketleri ekle
+                    // Etiketleri ekle (maksimum 4 adet)
                     currentTags = [];
                     if (data.etiketler) {
-                        data.etiketler.forEach(tag => addTag(tag));
+                        data.etiketler.slice(0, 4).forEach(tag => addTag(tag));
+                    }
+                    
+                    // AI'dan gelen açıklamayı haber açıklaması alanına ekle
+                    if (data.aciklama) {
+                        const aciklamaDisplay = document.getElementById('aciklamaDisplay');
+                        const aciklamaInput = document.getElementById('aciklamaInput');
+                        
+                        aciklamaDisplay.textContent = data.aciklama;
+                        aciklamaInput.value = data.aciklama;
+                        
+                        // Açıklamayı otomatik kaydet
+                        fetch('/api/haber-guncelle', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                haber_id: haberId,
+                                aciklama: data.aciklama
+                            })
+                        });
                     }
                     
                     showSuccess('AI ile yeniden yazma tamamlandı!');
@@ -493,7 +514,10 @@
 
         // Makaleyi yayınla
         function publishArticle() {
+            // GÜNCEL başlığı al (DOM'dan, düzenlenmişse)
             const baslik = document.getElementById('baslikDisplay').textContent.trim();
+            // GÜNCEL açıklamayı al (DOM'dan, düzenlenmişse)
+            const aciklama = document.getElementById('aciklamaDisplay').textContent.trim();
             const icerik = quill.root.innerHTML;
             const kategori_id = document.getElementById('kategoriSelect').value;
             const resim_dosyasi = document.getElementById('imageSelect').value;
